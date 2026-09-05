@@ -1,0 +1,13 @@
+.DS_Store
+build/
+*.xcuserstate
+xcuserdata/
+.tapflow/
+
+# Keep only reproducible host files; credentials, uploads and logs stay local.
+.tapflow-host/*
+!.tapflow-host/package.json
+!.tapflow-host/package-lock.json
+!.tapflow-host/tapflow.config.json
+!.tapflow-host/prepare-local-binding.mjs
+!.tapflow-host/start.sh

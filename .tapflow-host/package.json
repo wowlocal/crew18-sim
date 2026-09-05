@@ -1,0 +1,16 @@
+{
+  "name": "podlodka-review-host",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local Tapflow installation for Podlodka iOS Crew reviews",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "tapflow": "0.20.1"
+  },
+  "allowScripts": {
+    "@tapflowio/ios-agent@0.20.1": true,
+    "better-sqlite3@12.11.1": true
+  }
+}
