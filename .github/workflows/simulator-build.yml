@@ -1,0 +1,73 @@
+# Called from a case repository at the generated source commit. Pin this workflow
+# by its own commit SHA in the caller and in CREW_SIGNER_DIGEST on the server.
+name: Attested simulator prototype
+on:
+  workflow_call:
+    inputs:
+      bundle-id:
+        required: true
+        type: string
+      project:
+        required: true
+        type: string
+      scheme:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Build the participant source with server-issued identity
+        env:
+          CREW_BUNDLE_ID: ${{ inputs.bundle-id }}
+          CREW_PROJECT: ${{ inputs.project }}
+          CREW_SCHEME: ${{ inputs.scheme }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CREW_BUNDLE_ID" =~ ^io\.podlodka\.crew18\.s[a-f0-9]{32}\.b[a-f0-9]{32}$ ]]
+          [[ "$CREW_PROJECT" != /* && "$CREW_PROJECT" != *..* && "$CREW_PROJECT" == *.xcodeproj ]]
+          xcodebuild -project "$CREW_PROJECT" -scheme "$CREW_SCHEME" \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/crew-derived" CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            PRODUCT_BUNDLE_IDENTIFIER="$CREW_BUNDLE_ID" build
+          apps=("$RUNNER_TEMP"/crew-derived/Build/Products/Debug-iphonesimulator/*.app)
+          [[ ${#apps[@]} -eq 1 && -d "${apps[0]}" ]]
+          actual_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${apps[0]}/Info.plist")
+          [[ "$actual_id" == "$CREW_BUNDLE_ID" ]]
+          mkdir -p "$RUNNER_TEMP/crew-artifact"
+          ditto -c -k --norsrc --keepParent "${apps[0]}" "$RUNNER_TEMP/crew-artifact/prototype.app.zip"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: simulator-prototype
+          path: ${{ runner.temp }}/crew-artifact/prototype.app.zip
+          if-no-files-found: error
+          retention-days: 7
+  attest:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      # This job never checks out or executes participant source.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: simulator-prototype
+          path: artifact
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifact/prototype.app.zip

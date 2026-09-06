@@ -1,0 +1,12 @@
+{
+  "id": "pilot",
+  "day": 1,
+  "title": "Технический пилот Podlodka Dive",
+  "prompt": "Технический пример для проверки инфраструктуры. Реализуйте предложение участника в стартовой игре. Это не утверждённый кейс Wildberries.",
+  "source_repo": "wowlocal/crew18-sim",
+  "base_commit": "1307356bf8ff1db1daa32e7c7117dbbb347c6c21",
+  "project": "PodlodkaDive.xcodeproj",
+  "scheme": "PodlodkaDive",
+  "runtime_version": "26.5",
+  "is_open": false
+}

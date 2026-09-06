@@ -1,0 +1,10 @@
+# Mac client opens an outbound connection; the home router exposes no ports.
+[client]
+remote_addr = "REPLACE_WITH_VPS_HOST:2333"
+[client.transport]
+type = "noise"
+[client.transport.noise]
+remote_public_key = "REPLACE_WITH_SERVER_PUBLIC_KEY"
+[client.services.tapflow]
+token = "REPLACE_WITH_RANDOM_SHARED_TOKEN"
+local_addr = "127.0.0.1:4000"

@@ -1,0 +1,21 @@
+{$CREW_API_DOMAIN} {
+	request_body {
+		max_size 128MB
+	}
+	reverse_proxy 127.0.0.1:4100
+}
+
+{$CREW_REVIEW_DOMAIN} {
+	basic_auth {
+		{$CREW_REVIEW_USER} {$CREW_REVIEW_PASSWORD_HASH}
+	}
+	# Browser uploads must not bypass the control plane's artifact gate.
+	@directUpload {
+		method POST
+		path /api/v1/builds
+	}
+	respond @directUpload "Import verified builds through the Crew control plane." 403
+	reverse_proxy 127.0.0.1:4400 {
+		header_up X-Forwarded-For {http.request.remote.host}
+	}
+}

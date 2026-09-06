@@ -11,3 +11,9 @@ xcuserdata/
 !.tapflow-host/tapflow.config.json
 !.tapflow-host/prepare-local-binding.mjs
 !.tapflow-host/start.sh
+
+# Infrastructure state and local credentials
+/var/
+/infra/**/.env
+/infra/**/secrets/
+/infra/**/backups/

@@ -1,0 +1,16 @@
+[Unit]
+Description=Crew 18 encrypted simulator tunnel
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=rathole
+Group=rathole
+ExecStart=/usr/local/bin/rathole --server /etc/crew18/rathole-server.toml
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,53 @@
+# Linux VPS. Host networking keeps the API and rathole relay port on loopback.
+services:
+  api:
+    build:
+      context: ../control-plane
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=64m
+    volumes:
+      - control-data:/data
+    environment:
+      CREW_SIGNER_WORKFLOW: ${CREW_SIGNER_WORKFLOW:?Set the trusted reusable workflow path}
+      CREW_SIGNER_DIGEST: ${CREW_SIGNER_DIGEST:?Pin the reusable workflow commit}
+      GH_TOKEN: ${GH_TOKEN:-}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4100/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 1g
+    pids_limit: 128
+    logging:
+      options:
+        max-size: 10m
+        max-file: '3'
+  caddy:
+    image: caddy:2.11.4
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CREW_API_DOMAIN: ${CREW_API_DOMAIN:?Set the API domain}
+      CREW_REVIEW_DOMAIN: ${CREW_REVIEW_DOMAIN:?Set the review domain}
+      CREW_REVIEW_USER: ${CREW_REVIEW_USER:?Set the reviewer gateway username}
+      CREW_REVIEW_PASSWORD_HASH: ${CREW_REVIEW_PASSWORD_HASH:?Set a Caddy password hash}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    logging:
+      options:
+        max-size: 10m
+        max-file: '3'
+volumes:
+  control-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,19 @@
+[project]
+name = "crew-control"
+version = "0.1.0"
+description = "Participant-triggered prototype jobs and simulator artifact gate for Crew 18"
+requires-python = ">=3.12"
+dependencies = ["fastapi==0.141.1", "uvicorn==0.52.4", "httpx==0.28.1"]
+
+[dependency-groups]
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+crew-control = "crew_control.cli:main"
+
+[build-system]
+requires = ["hatchling==1.29.0"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

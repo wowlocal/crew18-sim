@@ -1,0 +1,5 @@
+.env
+*.toml
+!*.example.toml
+secrets/
+backups/

@@ -1,0 +1,5 @@
+*
+!Dockerfile
+!requirements.lock
+!crew_control/
+!crew_control/*.py

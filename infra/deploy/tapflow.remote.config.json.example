@@ -1,0 +1,4 @@
+{
+  "local": { "port": 4000, "dataDir": ".tapflow/data" },
+  "relay": { "url": "https://review.example.invalid" }
+}

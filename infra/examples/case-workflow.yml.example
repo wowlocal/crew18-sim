@@ -1,0 +1,20 @@
+# Install in the case repository's .github/workflows/prototype.yml.
+# The dispatcher must run it on the generated source commit/branch.
+name: Build prototype
+on:
+  workflow_dispatch:
+    inputs:
+      bundle-id:
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+jobs:
+  prototype:
+    uses: wowlocal/crew18-sim/.github/workflows/simulator-build.yml@REPLACE_WITH_REVIEWED_INFRA_COMMIT
+    with:
+      bundle-id: ${{ inputs.bundle-id }}
+      project: PodlodkaDive.xcodeproj
+      scheme: PodlodkaDive

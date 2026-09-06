@@ -1,0 +1,10 @@
+# Copy to a private config file outside Git. Run rathole as a supervised service.
+[server]
+bind_addr = "0.0.0.0:2333"
+[server.transport]
+type = "noise"
+[server.transport.noise]
+local_private_key = "REPLACE_WITH_SERVER_PRIVATE_KEY"
+[server.services.tapflow]
+token = "REPLACE_WITH_RANDOM_SHARED_TOKEN"
+bind_addr = "127.0.0.1:4400"
