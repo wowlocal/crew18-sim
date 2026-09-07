@@ -31,6 +31,7 @@ def read_token(path):
 
 
 def backup(database, output):
+    output = Path(output)
     # Snapshot the database first; all referenced verified artifacts are immutable.
     with tempfile.TemporaryDirectory(prefix='crew-backup-') as temporary:
         snapshot = Path(temporary) / 'control.sqlite3'
@@ -40,14 +41,18 @@ def backup(database, output):
             destination.close()
         with sqlite3.connect(snapshot) as db:
             hashes = [r[0] for r in db.execute("SELECT DISTINCT artifact_sha256 FROM builds WHERE state='verified'")]
-        fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, 'wb') as raw, tarfile.open(fileobj=raw, mode='w:gz') as archive:
-            archive.add(snapshot, arcname='control.sqlite3')
-            for digest in hashes:
-                path = database.directory / 'artifacts' / f'{digest}.zip'
-                if sha256_file(path) != digest:
-                    raise ValueError('Refusing to back up a corrupt artifact')
-                archive.add(path, arcname=f'artifacts/{digest}.zip')
+        # Stage beside the destination so publication is atomic and never replaces
+        # an existing backup. Failed writes must not leave a partial final archive.
+        with tempfile.NamedTemporaryFile(dir=output.parent, prefix='.crew-backup-', suffix='.tmp') as raw:
+            with tarfile.open(fileobj=raw, mode='w:gz') as archive:
+                archive.add(snapshot, arcname='control.sqlite3')
+                for digest in hashes:
+                    path = database.directory / 'artifacts' / f'{digest}.zip'
+                    if sha256_file(path) != digest:
+                        raise ValueError('Refusing to back up a corrupt artifact')
+                    archive.add(path, arcname=f'artifacts/{digest}.zip')
+            raw.flush()
+            os.link(raw.name, output)
 
 
 def promote(args):
