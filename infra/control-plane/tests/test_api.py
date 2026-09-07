@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import errno
 import json
 import time
 
@@ -178,3 +179,34 @@ def test_worker_can_recover_completion_response(setup):
     assert result.status_code == 200
     assert result.json()['build']['id'] == build['id']
     assert client.get('/v1/worker/jobs/' + build['job_id'], headers=tokens['worker2']).status_code == 404
+
+
+def test_upload_can_retry_after_temporary_file_creation_fails(setup, tmp_path, monkeypatch):
+    client, tokens, db, verified = setup
+    build = generated_build(client, tokens)
+    archive = make_archive(tmp_path / 'build.zip', build['bundle_id'])
+    url = '/v1/builds/' + build['id'] + '/artifact'
+    headers = {**tokens['worker1'], 'Content-Type': 'application/zip'}
+
+    def disk_full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, 'No space left on device')
+
+    with monkeypatch.context() as patch:
+        patch.setattr('crew_control.app.tempfile.mkstemp', disk_full)
+        with pytest.raises(OSError, match='No space left'):
+            client.post(url, content=archive.read_bytes(), headers=headers)
+
+    result = client.get('/v1/builds/' + build['id'], headers=tokens['worker1']).json()
+    assert result['state'] == 'rejected'
+    assert json.loads(result['report_json']) == {'error': 'Upload or verification interrupted'}
+    assert verified == []
+    assert list((db.directory / 'quarantine').iterdir()) == []
+    with db.connect() as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM audit WHERE action='artifact.rejected' AND subject=?",
+            (build['id'],)).fetchone()[0] == 1
+
+    response = client.post(url, content=archive.read_bytes(), headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()['state'] == 'verified'
+    assert client.get(url, headers=tokens['worker1']).content == archive.read_bytes()

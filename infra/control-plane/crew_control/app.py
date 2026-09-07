@@ -303,9 +303,10 @@ def create_app(settings: Settings | None = None, provenance_verifier=verify_prov
             if plan['state'] not in ('awaiting_artifact', 'rejected'):
                 raise HTTPException(409, 'Build already uploaded or verification in progress')
             db.execute("UPDATE builds SET state='verifying' WHERE id=?", (build_id,))
-        descriptor, name = tempfile.mkstemp(prefix='upload-', suffix='.zip', dir=settings.data_dir / 'quarantine')
-        temporary = Path(name)
+        temporary = None
         try:
+            descriptor, name = tempfile.mkstemp(prefix='upload-', suffix='.zip', dir=settings.data_dir / 'quarantine')
+            temporary = Path(name)
             with os.fdopen(descriptor, 'wb') as output:
                 size = 0
                 async for block in request.stream():
@@ -339,7 +340,8 @@ def create_app(settings: Settings | None = None, provenance_verifier=verify_prov
                 raise HTTPException(422, str(exc)) from exc
             raise
         finally:
-            temporary.unlink(missing_ok=True)
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     @application.get('/v1/builds/{build_id}/artifact')
     def download(build_id: str, user=Depends(principal)):
