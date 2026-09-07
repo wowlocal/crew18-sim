@@ -92,6 +92,44 @@ def test_checks_embedded_macho_even_outside_named_framework(tmp_path):
         inspect_archive(archive, 'io.test.prototype', '26.5')
 
 
+@pytest.mark.parametrize('bundle_dir', ['PlugIns/Widget.appex', 'PlugIns/Widget.APPEX',
+                                       'Frameworks/Shared.framework', 'Nested.app'])
+@pytest.mark.parametrize('plist_name', [None, 'info.plist', 'Info.PLIST'])
+def test_embedded_bundles_cannot_skip_metadata_validation(tmp_path, bundle_dir, plist_name):
+    extra = {f'Game.app/{bundle_dir}/Executable': binary()}
+    if plist_name:
+        extra[f'Game.app/{bundle_dir}/{plist_name}'] = plistlib.dumps({
+            'CFBundleIdentifier': 'io.someone.else', 'CFBundleExecutable': 'Missing'})
+    archive = make_archive(tmp_path / 'game.zip', extra=extra)
+    with pytest.raises(ArtifactError, match='Info.plist'):
+        inspect_archive(archive, 'io.test.prototype', '26.5')
+
+
+@pytest.mark.parametrize('suffix', ['appex', 'APPEX'])
+def test_extension_identity_is_checked_regardless_of_directory_case(tmp_path, suffix):
+    directory = f'Game.app/PlugIns/Widget.{suffix}'
+    archive = make_archive(tmp_path / 'game.zip', extra={
+        f'{directory}/Info.plist': plistlib.dumps({
+            'CFBundleIdentifier': 'io.someone.else', 'CFBundleExecutable': 'Widget'}),
+        f'{directory}/Widget': binary(),
+    })
+    with pytest.raises(ArtifactError, match='Extension bundle ID'):
+        inspect_archive(archive, 'io.test.prototype', '26.5')
+
+
+def test_accepts_embedded_bundles_with_valid_metadata(tmp_path):
+    extra = {}
+    for directory, bundle_id in [('PlugIns/Widget.appex', 'io.test.prototype.widget'),
+                                  ('Frameworks/Shared.framework', 'io.shared.library'),
+                                  ('Nested.app', 'io.test.nested')]:
+        extra[f'Game.app/{directory}/Info.plist'] = plistlib.dumps({
+            'CFBundleIdentifier': bundle_id, 'CFBundleExecutable': 'Executable'})
+        extra[f'Game.app/{directory}/Executable'] = binary(
+            filetype=6 if directory.endswith('.framework') else 2)
+    archive = make_archive(tmp_path / 'game.zip', extra=extra)
+    assert inspect_archive(archive, 'io.test.prototype', '26.5')['mach_o_files'] == 4
+
+
 def test_attestation_binds_source_signer_pin_and_runner(monkeypatch, tmp_path):
     captured = []
     def run(command, **kwargs):

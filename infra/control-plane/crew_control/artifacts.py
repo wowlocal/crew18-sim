@@ -1,6 +1,6 @@
 """Bounded, non-executing validation. An archive is never extracted by this module."""
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import hashlib
 import plistlib
 import re
@@ -259,17 +259,21 @@ def _inspect_zip(path, expected_bundle, runtime, limits):
             raise ArtifactError('App requires a newer simulator runtime')
         if main.get('CFBundleSupportedPlatforms') != ['iPhoneSimulator']:
             raise ArtifactError('Info.plist must target iPhoneSimulator')
-        for location, plist in plists.items():
-            bundle_dir = str(PurePosixPath(location).parent)
-            if not bundle_dir.endswith(('.app', '.appex', '.framework')):
+        # Enumerate explicit and implicit bundle directories, not just the plists
+        # found above: absent or differently cased metadata must not bypass checks.
+        for bundle_dir, is_directory in nodes.values():
+            if not is_directory or not bundle_dir.casefold().endswith(('.app', '.appex', '.framework')):
                 continue
+            plist = plists.get(f'{bundle_dir}/Info.plist')
+            if plist is None:
+                raise ArtifactError('Every bundle must contain a canonical Info.plist')
             executable = plist.get('CFBundleExecutable')
             if not isinstance(executable, str) or '/' in executable or executable in ('', '.', '..'):
                 raise ArtifactError('Invalid CFBundleExecutable')
             binary_path = f'{bundle_dir}/{executable}'
             if binary_path not in binaries:
                 raise ArtifactError('Bundle executable missing or not Mach-O')
-            if bundle_dir.endswith('.appex') and not str(plist.get('CFBundleIdentifier', '')).startswith(expected_bundle + '.'):
+            if bundle_dir.casefold().endswith('.appex') and not str(plist.get('CFBundleIdentifier', '')).startswith(expected_bundle + '.'):
                 raise ArtifactError('Extension bundle ID must belong to the main application')
         if binaries[f'{app}/{main["CFBundleExecutable"]}']['filetype'] != 2:
             raise ArtifactError('Main binary is not an executable')
