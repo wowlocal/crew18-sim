@@ -56,6 +56,40 @@ final class GameEngineTests: XCTestCase {
         advance(engine, 0.5, fps: fps)
     }
 
+    func testAccessibilityClockBearingUsesScreenClockFace() {
+        let origin = CGPoint(x: 100, y: 100)
+        XCTAssertEqual(AccessibilityNavigation.clockHour(from: origin, to: CGPoint(x: 100, y: 0)), 12)
+        XCTAssertEqual(AccessibilityNavigation.clockHour(from: origin, to: CGPoint(x: 200, y: 100)), 3)
+        XCTAssertEqual(AccessibilityNavigation.clockHour(from: origin, to: CGPoint(x: 100, y: 200)), 6)
+        XCTAssertEqual(AccessibilityNavigation.clockHour(from: origin, to: CGPoint(x: 0, y: 100)), 9)
+        XCTAssertEqual(AccessibilityNavigation.clockHour(from: origin, to: CGPoint(x: 200, y: 0)), 2)
+        XCTAssertEqual(AccessibilityNavigation.distanceMeters(from: origin, to: CGPoint(x: 400, y: 500)), 80)
+    }
+
+    func testSonarContactsIncludeRequiredObjectsAndRespectVisibilityAndRange() {
+        var level = empty
+        level.mines = [OceanMine(id: 1, position: CGPoint(x: 350, y: 300)),
+                       OceanMine(id: 2, position: CGPoint(x: 900, y: 300))]
+        level.rocks = [OceanRock(id: 1, vertices: [CGPoint(x: 380, y: 280), CGPoint(x: 420, y: 280), CGPoint(x: 400, y: 340)]),
+                       OceanRock(id: 2, vertices: [CGPoint(x: 1000, y: 900), CGPoint(x: 1040, y: 900), CGPoint(x: 1020, y: 940)])]
+        level.pickups = [OceanPickup(id: 7, kind: .battery, position: CGPoint(x: 500, y: 300)),
+                         OceanPickup(id: 8, kind: .sample, position: CGPoint(x: 1200, y: 1300))]
+        let engine = makeEngine(level: level)
+
+        XCTAssertTrue(engine.sonarContacts.contains { $0.id == "target" })
+        XCTAssertTrue(engine.sonarContacts.contains { $0.id == "base" })
+        XCTAssertTrue(engine.sonarContacts.contains { $0.id == "mine-1" })
+        XCTAssertFalse(engine.sonarContacts.contains { $0.id == "mine-2" })
+        XCTAssertTrue(engine.sonarContacts.contains { $0.id == "reef-1" })
+        XCTAssertFalse(engine.sonarContacts.contains { $0.id == "reef-2" })
+        XCTAssertFalse(engine.sonarContacts.contains { $0.id == "pickup-7" })
+
+        engine.activateSonar()
+        XCTAssertTrue(engine.sonarContacts.contains { $0.id == "pickup-7" })
+        XCTAssertFalse(engine.sonarContacts.contains { $0.id == "pickup-8" })
+        XCTAssertEqual(engine.sonarContacts.map(\.distanceMeters), engine.sonarContacts.map(\.distanceMeters).sorted())
+    }
+
     func testNeutralBuoyancyDoesNotMoveOrDrainEnergy() {
         let engine = makeEngine()
         let position = engine.position

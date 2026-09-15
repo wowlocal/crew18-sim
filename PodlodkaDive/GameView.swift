@@ -5,15 +5,29 @@ struct GameView: View {
     @StateObject private var engine: GameEngine
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingMap = false
+    @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
 
     init(engine: GameEngine = GameEngine()) {
+        let arguments = ProcessInfo.processInfo.arguments
+#if DEBUG
+        if let marker = arguments.firstIndex(of: "-accessibilityAuditState"), arguments.indices.contains(marker + 1) {
+            engine.prepareAccessibilityAuditState(arguments[marker + 1])
+        }
+#endif
         _engine = StateObject(wrappedValue: engine)
+        _showingMap = State(initialValue: arguments.contains("map"))
     }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                GameCanvas(engine: engine)
+                GameCanvas(engine: engine, nightExpedition: nightExpedition)
+                if nightExpedition, engine.state != .ready {
+                    Color.black.opacity(0.84)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
                 if engine.state == .ready {
                     welcome(size: proxy.size, insets: proxy.safeAreaInsets)
                 } else {
@@ -42,6 +56,9 @@ struct GameView: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onChange(of: scenePhase) { _, phase in if phase != .active { engine.pause() } }
+        .onChange(of: engine.state) { _, _ in
+            UIAccessibility.post(notification: .screenChanged, argument: nil)
+        }
         .sensoryFeedback(.selection, trigger: engine.pickupCount)
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.success, trigger: engine.state == .completed)
@@ -59,7 +76,7 @@ struct GameView: View {
                     .padding(.horizontal, 13).padding(.vertical, 10)
                     .background(OceanPalette.gold.opacity(0.08), in: Capsule())
                     .overlay(Capsule().stroke(OceanPalette.gold.opacity(0.15), lineWidth: 1))
-                    .accessibilityLabel("Лучшая доставленная добыча: \(engine.bestScore)")
+                    .accessibilityLabel(A11yL10n.format("a11y.best.format", defaultValue: "Лучшая доставленная добыча: %lld", Int64(engine.bestScore)))
             }
             .padding(.top, max(insets.top, 48) + 12)
             VStack(spacing: 12) {
@@ -75,6 +92,10 @@ struct GameView: View {
                     .multilineTextAlignment(.center)
             }
             .padding(.top, size.height * 0.045)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(A11yL10n.text("a11y.welcome.title", defaultValue: "Podlodka Dive. Курс на глубину."))
+            .accessibilityValue(A11yL10n.text("a11y.welcome.objective", defaultValue: "Найди чёрный ящик и вернись с добычей."))
+            .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 0)
             VStack(spacing: size.height < 720 ? 16 : 22) {
                 HStack(spacing: 7) {
@@ -87,6 +108,9 @@ struct GameView: View {
                     Rectangle().fill(OceanPalette.teal.opacity(0.15)).frame(width: 1, height: 48)
                     instruction(icon: "dot.radiowaves.left.and.right", title: "Сонар и форсаж", detail: "Ищи. Маневрируй. Исследуй.")
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(A11yL10n.text("a11y.welcome.controls", defaultValue: "Управление: свободный курс, сонар и форсаж."))
+                .accessibilityHint(A11yL10n.text("a11y.welcome.controls.hint", defaultValue: "В экспедиции выбирай курс действиями VoiceOver на руле."))
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
@@ -96,13 +120,22 @@ struct GameView: View {
                 } label: {
                     HStack { Spacer(); Text("Начать экспедицию"); Spacer(); Image(systemName: "arrow.right") }
                 }
-                .buttonStyle(DiveButtonStyle()).accessibilityIdentifier("startDive")
+                .buttonStyle(DiveButtonStyle())
+                .accessibilityLabel(A11yL10n.text("a11y.start", defaultValue: "Начать экспедицию"))
+                .accessibilityHint(A11yL10n.text("a11y.start.hint", defaultValue: "Запускает экспедицию и открывает приборы управления."))
+                .accessibilityIdentifier("startDive")
+                Toggle(isOn: $nightExpedition) {
+                    Text(String(localized: "night.toggle", defaultValue: "Ночная экспедиция"))
+                }
+                .tint(OceanPalette.teal)
+                .accessibilityHint(A11yL10n.text("night.hint", defaultValue: "Затемняет океан и выключает фонарь. Управление не меняется."))
                 Text("Береги корпус и заряд на обратный путь")
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(OceanPalette.muted)
             }
             .padding(.bottom, max(insets.bottom, 24) + 16)
         }
         .padding(.horizontal, 26)
+        .accessibilityElement(children: .contain)
     }
 
     private var brand: some View {
@@ -139,9 +172,15 @@ struct GameView: View {
                         .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(A11yL10n.text("a11y.objective.label", defaultValue: "Цель экспедиции"))
+                .accessibilityValue(engine.hasBlackBox
+                    ? A11yL10n.text("a11y.objective.base", defaultValue: "Доставить чёрный ящик на базу")
+                    : A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик"))
+                .accessibilitySortPriority(8)
                 Spacer(minLength: 0)
-                hudButton("map", label: "Карта экспедиции", id: "openMap") { engine.pause(); showingMap = true }
-                hudButton("pause.fill", label: "Пауза", id: "pauseDive", action: engine.pause)
+                hudButton("map", label: A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"), id: "openMap", action: openMap)
+                hudButton("pause.fill", label: A11yL10n.text("a11y.pause", defaultValue: "Пауза"), id: "pauseDive", action: engine.pause)
             }
             HStack(spacing: 13) {
                 HStack(spacing: 6) {
@@ -155,7 +194,10 @@ struct GameView: View {
                         }
                 }
                 .foregroundStyle(engine.energy < 25 ? OceanPalette.danger : OceanPalette.teal)
-                .accessibilityElement(children: .ignore).accessibilityLabel("Энергия: \(Int(engine.energy)) процентов")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(A11yL10n.text("a11y.energy.label", defaultValue: "Энергия"))
+                .accessibilityValue(A11yL10n.format("a11y.percent.format", defaultValue: "%lld процентов", Int64(engine.energy)))
+                .accessibilitySortPriority(7)
                 HStack(spacing: 4) {
                     ForEach(0..<3) { index in
                         Image(systemName: index < engine.hull ? "heart.fill" : "heart")
@@ -163,11 +205,16 @@ struct GameView: View {
                     }
                     if engine.hasShield { Image(systemName: "shield.fill").font(.system(size: 11)).foregroundStyle(OceanPalette.blue) }
                 }
-                .accessibilityElement(children: .ignore).accessibilityLabel("Корпус: \(engine.hull) из 3. \(engine.hasShield ? "Щит активен" : "")")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(A11yL10n.text("a11y.hull.label", defaultValue: "Корпус"))
+                .accessibilityValue(hullAccessibilityValue)
+                .accessibilitySortPriority(6)
                 Spacer(minLength: 0)
                 Label("\(engine.cargoValue)", systemImage: "shippingbox")
                     .font(.system(size: 12, weight: .medium, design: .monospaced)).foregroundStyle(OceanPalette.gold)
-                    .accessibilityLabel("Груз на борту: \(engine.cargoValue)")
+                    .accessibilityLabel(A11yL10n.text("a11y.cargo.label", defaultValue: "Груз на борту"))
+                    .accessibilityValue("\(engine.cargoValue)")
+                    .accessibilitySortPriority(5)
             }
             .allowsHitTesting(false)
             HStack(spacing: 6) {
@@ -180,6 +227,11 @@ struct GameView: View {
             }
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
             .foregroundStyle(OceanPalette.gold.opacity(0.85)).allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(A11yL10n.text("a11y.target.course", defaultValue: "Курс на цель"))
+            .accessibilityValue(A11yL10n.format("a11y.target.value.format", defaultValue: "Сигнал: %lld метров, на %lld часов",
+                                                Int64(engine.targetDistance), Int64(engine.targetClockHour)))
+            .accessibilitySortPriority(4)
             Spacer()
         }
         .padding(.horizontal, 22).padding(.top, max(insets.top, 48) + 9)
@@ -196,6 +248,15 @@ struct GameView: View {
                 .background(OceanPalette.ink.opacity(0.6), in: Circle())
                 .overlay(Circle().stroke(OceanPalette.teal.opacity(0.22), lineWidth: 1))
         }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(id)
+    }
+
+    private func openMap() {
+        engine.pause()
+        showingMap = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            UIAccessibility.post(notification: .screenChanged, argument: nil)
+            engine.announceSectorOverview()
+        }
     }
 
     private func controls(insets: EdgeInsets) -> some View {
@@ -215,20 +276,30 @@ struct GameView: View {
                     .padding(.horizontal, 16).allowsHitTesting(false)
             }
             HStack(alignment: .center, spacing: 0) {
-                SteeringPad(onInput: engine.setSteering)
+                SteeringPad(onInput: engine.setSteering, steering: engine.steering,
+                            contacts: engine.sonarContacts)
                     .frame(width: 174, height: 158)
+                    .accessibilitySortPriority(3)
                 Spacer(minLength: 0)
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
                         AbilityButton(icon: "dot.radiowaves.left.and.right", title: "СОНАР",
                                       detail: engine.sonarCooldown > 0 ? "\(Int(ceil(engine.sonarCooldown))) с" : "Поиск",
                                       progress: 1 - engine.sonarCooldown / 8, enabled: engine.canSonar,
-                                      color: OceanPalette.teal, action: engine.activateSonar)
+                                      color: OceanPalette.teal,
+                                      accessibilityLabel: A11yL10n.text("a11y.sonar", defaultValue: "Сонар"),
+                                      accessibilityValue: abilityValue(cooldown: engine.sonarCooldown),
+                                      accessibilityHint: A11yL10n.text("a11y.sonar.hint", defaultValue: "Обнаруживает находки поблизости и добавляет их в контакты."),
+                                      action: engine.activateSonar)
                             .accessibilityIdentifier("sonar")
                         AbilityButton(icon: "bolt.fill", title: "ФОРСАЖ",
                                       detail: engine.boostCooldown > 0 ? "\(Int(ceil(engine.boostCooldown))) с" : "−7 энергии",
                                       progress: 1 - engine.boostCooldown / 4.5, enabled: engine.canBoost,
-                                      color: OceanPalette.gold, action: engine.activateBoost)
+                                      color: OceanPalette.gold,
+                                      accessibilityLabel: A11yL10n.text("a11y.boost", defaultValue: "Форсаж"),
+                                      accessibilityValue: abilityValue(cooldown: engine.boostCooldown),
+                                      accessibilityHint: A11yL10n.text("a11y.boost.hint", defaultValue: "Даёт рывок по выбранному курсу и расходует 7 энергии."),
+                                      action: engine.activateBoost)
                             .accessibilityIdentifier("boost")
                     }
                     if engine.runElapsed < 12 {
@@ -242,6 +313,19 @@ struct GameView: View {
             .padding(.bottom, max(insets.bottom, 20))
             .background(LinearGradient(colors: [.clear, OceanPalette.ink.opacity(0.82)], startPoint: .top, endPoint: .bottom).allowsHitTesting(false))
         }
+    }
+
+    private func abilityValue(cooldown: TimeInterval) -> String {
+        cooldown > 0
+            ? A11yL10n.format("a11y.cooldown.format", defaultValue: "Перезарядка: %lld секунд", Int64(ceil(cooldown)))
+            : A11yL10n.text("a11y.ready", defaultValue: "Готов")
+    }
+
+    private var hullAccessibilityValue: String {
+        if engine.hasShield {
+            return A11yL10n.format("a11y.hull.shield.format", defaultValue: "%lld из 3. Щит активен", Int64(engine.hull))
+        }
+        return A11yL10n.format("a11y.hull.format", defaultValue: "%lld из 3", Int64(engine.hull))
     }
 
     private func objectivePointer(size: CGSize) -> some View {
@@ -274,6 +358,7 @@ struct GameView: View {
                 Spacer()
                 Text("ПАУЗА").font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(OceanPalette.muted)
             }
+            .accessibilityHidden(true)
             ExpeditionMap(engine: engine).frame(height: min(395, height * 0.49))
                 .background(OceanPalette.ink.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
             VStack(spacing: 9) {
@@ -289,14 +374,18 @@ struct GameView: View {
                     mapKey("diamond", "Образец", OceanPalette.gold)
                 }
             }
+            .accessibilityHidden(true)
             Text("Сонар отмечает находки. Линия — пройденный путь.")
                 .font(.system(size: 10)).foregroundStyle(OceanPalette.muted).multilineTextAlignment(.center)
+                .accessibilityHidden(true)
             Button {
                 showingMap = false
                 engine.togglePause()
             } label: {
                 HStack { Spacer(); Text("Вернуться в океан"); Spacer(); Image(systemName: "arrow.right") }
             }.buttonStyle(DiveButtonStyle()).accessibilityIdentifier("closeMap")
+                .accessibilityLabel(A11yL10n.text("a11y.map.close", defaultValue: "Вернуться в океан"))
+                .accessibilityHint(A11yL10n.text("a11y.map.close.hint", defaultValue: "Закрывает карту и продолжает экспедицию."))
         }
         .padding(22).frame(maxWidth: 380)
         .background(Color(red: 0.035, green: 0.15, blue: 0.20), in: RoundedRectangle(cornerRadius: 27))
@@ -326,10 +415,18 @@ struct GameView: View {
                     .foregroundStyle(OceanPalette.white).lineLimit(1).minimumScaleFactor(0.75)
                 Text(detail).font(.system(size: 13)).foregroundStyle(OceanPalette.muted).multilineTextAlignment(.center).lineSpacing(3)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(resultAccessibilityTitle(paused: paused, success: success))
+            .accessibilityValue(resultAccessibilityDetail(paused: paused, success: success))
+            .accessibilityAddTraits(.isHeader)
             HStack(spacing: 0) {
-                resultStat(paused ? engine.cargoValue : engine.score, title: paused ? "ГРУЗ НА БОРТУ" : "ДОСТАВЛЕНО", highlighted: true)
+                resultStat(paused ? engine.cargoValue : engine.score, title: paused ? "ГРУЗ НА БОРТУ" : "ДОСТАВЛЕНО",
+                           accessibilityTitle: paused
+                               ? A11yL10n.text("a11y.cargo.label", defaultValue: "Груз на борту")
+                               : A11yL10n.text("a11y.delivered", defaultValue: "Доставлено"), highlighted: true)
                 Rectangle().fill(OceanPalette.teal.opacity(0.15)).frame(width: 1, height: 44)
-                resultStat(engine.bestScore, title: "ЛУЧШАЯ ДОБЫЧА", highlighted: false)
+                resultStat(engine.bestScore, title: "ЛУЧШАЯ ДОБЫЧА",
+                           accessibilityTitle: A11yL10n.text("a11y.best.label", defaultValue: "Лучшая добыча"), highlighted: false)
             }
             .padding(.vertical, 16).background(OceanPalette.teal.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
             VStack(spacing: 12) {
@@ -338,13 +435,18 @@ struct GameView: View {
                 } label: {
                     HStack { Spacer(); Text(paused ? "Продолжить" : "Новая экспедиция"); Spacer(); Image(systemName: paused ? "play.fill" : "arrow.clockwise") }
                 }.buttonStyle(DiveButtonStyle()).accessibilityIdentifier(paused ? "resumeDive" : "retryDive")
+                    .accessibilityLabel(paused
+                        ? A11yL10n.text("a11y.resume", defaultValue: "Продолжить")
+                        : A11yL10n.text("a11y.retry", defaultValue: "Новая экспедиция"))
                 if paused {
-                    Button("Открыть карту") { showingMap = true }
+                    Button("Открыть карту", action: openMap)
                         .font(.system(size: 13, weight: .medium)).foregroundStyle(OceanPalette.teal).frame(minHeight: 35)
+                        .accessibilityLabel(A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"))
                 }
                 Button("На поверхность") { showingMap = false; engine.returnToMenu() }
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(OceanPalette.muted).frame(minHeight: 35)
                     .accessibilityIdentifier("returnToMenu")
+                    .accessibilityLabel(A11yL10n.text("a11y.return.menu", defaultValue: "На поверхность"))
             }
         }
         .padding(25).frame(maxWidth: 360)
@@ -353,12 +455,30 @@ struct GameView: View {
         .padding(.horizontal, 25)
     }
 
-    private func resultStat(_ value: Int, title: String, highlighted: Bool) -> some View {
+    private func resultAccessibilityTitle(paused: Bool, success: Bool) -> String {
+        if paused { return A11yL10n.text("a11y.result.paused", defaultValue: "Экспедиция на паузе") }
+        if success { return A11yL10n.text("a11y.result.success", defaultValue: "Груз доставлен") }
+        return A11yL10n.text("a11y.result.failure", defaultValue: "Экспедиция завершена")
+    }
+
+    private func resultAccessibilityDetail(paused: Bool, success: Bool) -> String {
+        if paused { return A11yL10n.text("a11y.result.paused.detail", defaultValue: "Заряд сохраняется.") }
+        if success { return A11yL10n.text("a11y.result.success.detail", defaultValue: "Чёрный ящик на базе.") }
+        if engine.failureReason == .energy {
+            return A11yL10n.text("a11y.result.energy.detail", defaultValue: "Заряд закончился. Груз остался на глубине.")
+        }
+        return A11yL10n.text("a11y.result.hull.detail", defaultValue: "Корпус не выдержал. Груз остался на глубине.")
+    }
+
+    private func resultStat(_ value: Int, title: String, accessibilityTitle: String, highlighted: Bool) -> some View {
         VStack(spacing: 6) {
             Text("\(value)").font(.system(size: 33, weight: .semibold, design: .rounded)).monospacedDigit()
                 .foregroundStyle(highlighted ? OceanPalette.white : OceanPalette.gold)
             Text(title).font(.system(size: 8, weight: .medium, design: .monospaced)).tracking(0.6).foregroundStyle(OceanPalette.muted)
         }.frame(maxWidth: .infinity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityTitle)
+            .accessibilityValue("\(value)")
     }
 }
 
@@ -366,14 +486,20 @@ struct GameView: View {
 /// other thumb presses an ability, and handles cancellation explicitly.
 private struct SteeringPad: UIViewRepresentable {
     let onInput: (CGVector) -> Void
+    let steering: CGVector
+    let contacts: [AccessibilityContact]
 
     func makeUIView(context: Context) -> SteeringSurface {
         let view = SteeringSurface()
         view.onInput = onInput
+        view.updateAccessibility(steering: steering, contacts: contacts)
         return view
     }
 
-    func updateUIView(_ view: SteeringSurface, context: Context) { view.onInput = onInput }
+    func updateUIView(_ view: SteeringSurface, context: Context) {
+        view.onInput = onInput
+        view.updateAccessibility(steering: steering, contacts: contacts)
+    }
     static func dismantleUIView(_ view: SteeringSurface, coordinator: ()) { view.releaseInput() }
 }
 
@@ -382,17 +508,92 @@ private final class SteeringSurface: UIView {
     private var finger: UITouch?
     private var origin: CGPoint?
     private var knob = CGVector.zero
+    private var contacts: [AccessibilityContact] = []
+    private var rotorIndex: Int?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isMultipleTouchEnabled = true
         isAccessibilityElement = true
-        accessibilityLabel = "Руль подлодки. Тяни в нужном направлении. Отпусти, чтобы остановиться."
+        accessibilityLabel = A11yL10n.text("a11y.steering.label", defaultValue: "Руль подлодки")
+        accessibilityHint = A11yL10n.text("a11y.steering.hint", defaultValue: "Выберите одно из восьми направлений в действиях VoiceOver или остановку.")
         accessibilityIdentifier = "steeringPad"
+        accessibilityCustomActions = [
+            action("a11y.direction.north", "Север", #selector(steerNorth)),
+            action("a11y.direction.northeast", "Северо-восток", #selector(steerNorthEast)),
+            action("a11y.direction.east", "Восток", #selector(steerEast)),
+            action("a11y.direction.southeast", "Юго-восток", #selector(steerSouthEast)),
+            action("a11y.direction.south", "Юг", #selector(steerSouth)),
+            action("a11y.direction.southwest", "Юго-запад", #selector(steerSouthWest)),
+            action("a11y.direction.west", "Запад", #selector(steerWest)),
+            action("a11y.direction.northwest", "Северо-запад", #selector(steerNorthWest)),
+            action("a11y.direction.stop", "Стоп, зависнуть", #selector(stop))
+        ]
+        accessibilityCustomRotors = [UIAccessibilityCustomRotor(
+            name: A11yL10n.text("a11y.rotor.contacts", defaultValue: "Контакты сонара")
+        ) { [weak self] predicate in
+            guard let self, !self.contacts.isEmpty else { return nil }
+            let step = predicate.searchDirection == .next ? 1 : -1
+            let current = self.rotorIndex ?? (step > 0 ? -1 : self.contacts.count)
+            let next = (current + step + self.contacts.count) % self.contacts.count
+            self.rotorIndex = next
+            self.accessibilityValue = A11yL10n.contact(self.contacts[next])
+            return UIAccessibilityCustomRotorItemResult(targetElement: self, targetRange: nil)
+        }]
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func action(_ key: StaticString, _ fallback: String.LocalizationValue, _ selector: Selector) -> UIAccessibilityCustomAction {
+        UIAccessibilityCustomAction(name: A11yL10n.text(key, defaultValue: fallback), target: self, selector: selector)
+    }
+
+    func updateAccessibility(steering: CGVector, contacts: [AccessibilityContact]) {
+        self.contacts = contacts
+        if let rotorIndex, rotorIndex >= contacts.count { self.rotorIndex = nil }
+        guard rotorIndex == nil else { return }
+        let strength = hypot(steering.dx, steering.dy)
+        let course = courseName(for: steering)
+        accessibilityValue = A11yL10n.format("a11y.steering.value.format", defaultValue: "Курс: %@, тяга %lld процентов",
+                                             course, Int64((strength * 100).rounded()))
+    }
+
+    private func courseName(for vector: CGVector) -> String {
+        guard hypot(vector.dx, vector.dy) >= 0.08 else {
+            return A11yL10n.text("a11y.course.stop", defaultValue: "стоп")
+        }
+        let sector = Int((atan2(vector.dy, vector.dx) / (.pi / 4)).rounded())
+        switch sector {
+        case 0: return A11yL10n.text("a11y.course.east", defaultValue: "восток")
+        case 1: return A11yL10n.text("a11y.course.southeast", defaultValue: "юго-восток")
+        case 2: return A11yL10n.text("a11y.course.south", defaultValue: "юг")
+        case 3: return A11yL10n.text("a11y.course.southwest", defaultValue: "юго-запад")
+        case 4, -4: return A11yL10n.text("a11y.course.west", defaultValue: "запад")
+        case -3: return A11yL10n.text("a11y.course.northwest", defaultValue: "северо-запад")
+        case -2: return A11yL10n.text("a11y.course.north", defaultValue: "север")
+        default: return A11yL10n.text("a11y.course.northeast", defaultValue: "северо-восток")
+        }
+    }
+
+    private func steer(_ vector: CGVector) -> Bool {
+        rotorIndex = nil
+        knob = CGVector(dx: vector.dx * 44, dy: vector.dy * 44)
+        onInput?(vector)
+        updateAccessibility(steering: vector, contacts: contacts)
+        setNeedsDisplay()
+        return true
+    }
+
+    @objc private func steerNorth() -> Bool { steer(CGVector(dx: 0, dy: -1)) }
+    @objc private func steerNorthEast() -> Bool { steer(CGVector(dx: 0.707, dy: -0.707)) }
+    @objc private func steerEast() -> Bool { steer(CGVector(dx: 1, dy: 0)) }
+    @objc private func steerSouthEast() -> Bool { steer(CGVector(dx: 0.707, dy: 0.707)) }
+    @objc private func steerSouth() -> Bool { steer(CGVector(dx: 0, dy: 1)) }
+    @objc private func steerSouthWest() -> Bool { steer(CGVector(dx: -0.707, dy: 0.707)) }
+    @objc private func steerWest() -> Bool { steer(CGVector(dx: -1, dy: 0)) }
+    @objc private func steerNorthWest() -> Bool { steer(CGVector(dx: -0.707, dy: -0.707)) }
+    @objc private func stop() -> Bool { steer(.zero) }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard finger == nil, let touch = touches.first else { return }
@@ -415,6 +616,7 @@ private final class SteeringSurface: UIView {
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { releaseInput() }
 
     func releaseInput() {
+        rotorIndex = nil
         finger = nil
         origin = nil
         knob = .zero
@@ -459,6 +661,9 @@ private struct AbilityButton: View {
     let progress: Double
     let enabled: Bool
     let color: Color
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let accessibilityHint: String
     let action: () -> Void
     var body: some View {
         Button(action: action) {
@@ -474,7 +679,11 @@ private struct AbilityButton: View {
                 Text(title).font(.system(size: 8, weight: .semibold, design: .monospaced)).tracking(0.6).foregroundStyle(color)
                 Text(detail).font(.system(size: 9)).foregroundStyle(OceanPalette.muted)
             }.frame(width: 64)
-        }.buttonStyle(.plain).disabled(!enabled).accessibilityLabel("\(title), \(detail)")
+        }.buttonStyle(.plain).disabled(!enabled)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(accessibilityValue)
+            .accessibilityHint(accessibilityHint)
+            .accessibilitySortPriority(2)
     }
 }
 
@@ -518,7 +727,7 @@ private struct ExpeditionMap: View {
             context.fill(Path(ellipseIn: CGRect(x: boat.x - 4, y: boat.y - 4, width: 8, height: 8)), with: .color(.white))
             context.stroke(Path(ellipseIn: CGRect(x: boat.x - 8, y: boat.y - 8, width: 16, height: 16)), with: .color(.white.opacity(0.4)), lineWidth: 1)
         }
-        .accessibilityLabel("Карта сектора: база на северо-западе, корабль на юго-востоке. Между рифами есть западный обход и центральный путь через мины.")
+        .accessibilityLabel(engine.sectorOverview)
     }
 }
 

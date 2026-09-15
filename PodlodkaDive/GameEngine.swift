@@ -1,11 +1,89 @@
 import Combine
 import Foundation
 import QuartzCore
+import UIKit
 
 enum RunState: Equatable { case ready, playing, paused, gameOver, completed }
 enum FailureReason { case hull, energy }
 enum PickupKind: String { case battery, shield, sample, blackBox }
 enum MinePhase { case idle, armed, exploding, spent }
+
+enum AccessibilityContactKind: String, CaseIterable {
+    case target, base, mine, reef, battery, shield, sample
+}
+
+struct AccessibilityContact: Identifiable, Equatable {
+    let id: String
+    let kind: AccessibilityContactKind
+    let distanceMeters: Int
+    let clockHour: Int
+}
+
+enum AccessibilityNavigation {
+    static func distanceMeters(from origin: CGPoint, to destination: CGPoint) -> Int {
+        Int(hypot(destination.x - origin.x, destination.y - origin.y) * 0.16)
+    }
+
+    /// Screen coordinates: twelve o'clock is up (negative Y), then clockwise.
+    static func clockHour(from origin: CGPoint, to destination: CGPoint) -> Int {
+        let angle = atan2(destination.x - origin.x, -(destination.y - origin.y))
+        let normalized = angle >= 0 ? angle : angle + 2 * .pi
+        let tick = Int((normalized / (2 * .pi) * 12).rounded()) % 12
+        return tick == 0 ? 12 : tick
+    }
+}
+
+enum A11yL10n {
+    static func text(_ key: StaticString, defaultValue: String.LocalizationValue) -> String {
+        String(localized: key, defaultValue: defaultValue)
+    }
+
+    static func format(_ key: StaticString, defaultValue: String.LocalizationValue, _ arguments: CVarArg...) -> String {
+        String(format: String(localized: key, defaultValue: defaultValue), locale: .current, arguments: arguments)
+    }
+
+    static func contactKind(_ kind: AccessibilityContactKind) -> String {
+        switch kind {
+        case .target: text("a11y.contact.target", defaultValue: "Цель")
+        case .base: text("a11y.contact.base", defaultValue: "База")
+        case .mine: text("a11y.contact.mine", defaultValue: "Мина")
+        case .reef: text("a11y.contact.reef", defaultValue: "Риф")
+        case .battery: text("a11y.contact.battery", defaultValue: "Батарея")
+        case .shield: text("a11y.contact.shield", defaultValue: "Щит")
+        case .sample: text("a11y.contact.sample", defaultValue: "Образец")
+        }
+    }
+
+    static func contact(_ contact: AccessibilityContact) -> String {
+        format("a11y.contact.format", defaultValue: "%@, %lld метров, на %lld часов",
+               contactKind(contact.kind), Int64(contact.distanceMeters), Int64(contact.clockHour))
+    }
+}
+
+@MainActor
+private final class AccessibilityAnnouncer {
+    enum Policy { case information, navigation, urgent }
+
+    private var lastInformationTime: CFTimeInterval = -.infinity
+
+    func post(_ message: String, policy: Policy) {
+        guard UIAccessibility.isVoiceOverRunning else { return }
+        let now = CACurrentMediaTime()
+        if policy == .information {
+            guard now - lastInformationTime >= 2 else { return }
+            lastInformationTime = now
+        }
+        if policy == .urgent {
+            let spoken = NSMutableAttributedString(string: message)
+            spoken.addAttribute(.accessibilitySpeechQueueAnnouncement,
+                                value: false,
+                                range: NSRange(location: 0, length: spoken.length))
+            UIAccessibility.post(notification: .announcement, argument: spoken)
+        } else {
+            UIAccessibility.post(notification: .announcement, argument: message)
+        }
+    }
+}
 
 struct OceanPickup: Identifiable {
     let id: Int
@@ -177,6 +255,10 @@ final class GameEngine: NSObject, ObservableObject {
     private var displayLink: CADisplayLink?
     private var previousTimestamp: CFTimeInterval?
     private var accumulator: TimeInterval = 0
+    private let accessibilityAnnouncer = AccessibilityAnnouncer()
+    private var announcedLowEnergy = false
+    private var announcedCriticalHull = false
+    private var announcedDockingHint = false
     private let defaults: UserDefaults
     private static let bestKey = "podlodkaDive.expedition.bestSalvage"
     static let hullRadius: CGFloat = 20
@@ -206,6 +288,53 @@ final class GameEngine: NSObject, ObservableObject {
     var canBoost: Bool { state == .playing && boostCooldown <= 0 && energy >= Self.boostCost }
     var canSonar: Bool { state == .playing && sonarCooldown <= 0 }
     var submarineRotationRadians: Double { Double(atan2(velocity.dy, max(55, abs(velocity.dx)))) * 0.55 }
+    var targetClockHour: Int { AccessibilityNavigation.clockHour(from: position, to: target) }
+
+    var sonarContacts: [AccessibilityContact] {
+        func contact(id: String, kind: AccessibilityContactKind, point: CGPoint) -> AccessibilityContact {
+            AccessibilityContact(id: id, kind: kind,
+                                 distanceMeters: AccessibilityNavigation.distanceMeters(from: position, to: point),
+                                 clockHour: AccessibilityNavigation.clockHour(from: position, to: point))
+        }
+
+        var contacts = [contact(id: "target", kind: .target, point: target),
+                        contact(id: "base", kind: .base, point: level.base)]
+        contacts += mines.filter { mine in
+            mine.phase != .spent && hypot(mine.position.x - position.x, mine.position.y - position.y) <= 400
+        }.map { contact(id: "mine-\($0.id)", kind: .mine, point: $0.position) }
+        contacts += level.rocks.compactMap { rock in
+            let nearest = CGPoint(x: min(max(position.x, rock.bounds.minX), rock.bounds.maxX),
+                                  y: min(max(position.y, rock.bounds.minY), rock.bounds.maxY))
+            guard hypot(nearest.x - position.x, nearest.y - position.y) <= 400 else { return nil }
+            return contact(id: "reef-\(rock.id)", kind: .reef, point: nearest)
+        }
+        contacts += pickups.filter { pickup in
+            !pickup.collected && pickup.kind != .blackBox && revealedPickups.contains(pickup.id)
+        }.map { pickup in
+            let kind: AccessibilityContactKind = switch pickup.kind {
+            case .battery: .battery
+            case .shield: .shield
+            case .sample: .sample
+            case .blackBox: .target
+            }
+            return contact(id: "pickup-\(pickup.id)", kind: kind, point: pickup.position)
+        }
+        return contacts.sorted {
+            if $0.distanceMeters == $1.distanceMeters { return $0.id < $1.id }
+            return $0.distanceMeters < $1.distanceMeters
+        }
+    }
+
+    var sectorOverview: String {
+        let objective = hasBlackBox
+            ? A11yL10n.text("a11y.objective.base", defaultValue: "Доставить чёрный ящик на базу")
+            : A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик")
+        let nearby = sonarContacts.prefix(3).map(A11yL10n.contact).joined(separator: "; ")
+        let remaining = pickups.filter { !$0.collected }.count
+        return A11yL10n.format("a11y.map.overview.format",
+                               defaultValue: "Обзор сектора. Цель: %@. Ближайшие контакты: %@. Осталось находок: %lld.",
+                               objective, nearby, Int64(remaining))
+    }
 
     func resize(to size: CGSize) {
         guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return }
@@ -242,7 +371,10 @@ final class GameEngine: NSObject, ObservableObject {
         trail = [position]
         accumulator = 0
         previousTimestamp = nil
-        announce("Найди чёрный ящик. Сохрани заряд на возвращение.", duration: 7)
+        announcedLowEnergy = false
+        announcedCriticalHull = false
+        announcedDockingHint = false
+        announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
         updateCamera(dt: 1, snap: true)
         state = .playing
     }
@@ -254,6 +386,25 @@ final class GameEngine: NSObject, ObservableObject {
         previousTimestamp = nil
         accumulator = 0
     }
+
+#if DEBUG
+    /// Deterministic, non-production states used only by accessibility audits.
+    func prepareAccessibilityAuditState(_ requestedState: String) {
+        switch requestedState {
+        case "playing": startGame()
+        case "paused", "map": startGame(); pause()
+        case "completed":
+            startGame()
+            hasBlackBox = true
+            samples = 2
+            finish(success: true)
+        case "gameOver":
+            startGame()
+            finish(success: false, reason: .energy)
+        default: break
+        }
+    }
+#endif
 
     func setSteering(_ vector: CGVector) {
         guard state == .playing, vector.dx.isFinite, vector.dy.isFinite else { return }
@@ -281,7 +432,7 @@ final class GameEngine: NSObject, ObservableObject {
         sonarRemaining = 5
         sonarCooldown = 8
         revealNearby(radius: 680)
-        announce("Сонар: находки отмечены на карте", duration: 2.5)
+        announce(A11yL10n.text("event.sonar", defaultValue: "Сонар: находки отмечены на карте"), duration: 2.5)
         objectWillChange.send()
     }
 
@@ -387,6 +538,7 @@ final class GameEngine: NSObject, ObservableObject {
             if trail.count > 600 { trail.removeFirst() }
         }
         revealNearby(radius: sonarRemaining > 0 ? 680 : 240)
+        announceThresholdsAndDocking()
         updateCamera(dt: dt)
     }
 
@@ -422,7 +574,7 @@ final class GameEngine: NSObject, ObservableObject {
                 if distance < OceanMine.triggerRadius {
                     mines[index].phase = .armed
                     mines[index].timer = OceanMine.fuse
-                    announce("Мина активирована — отойди!", duration: 1.5)
+                    announce(A11yL10n.text("event.mine", defaultValue: "Мина активирована — отойди!"), duration: 1.5, urgent: true)
                 }
             case .armed:
                 mines[index].timer -= delta
@@ -451,10 +603,11 @@ final class GameEngine: NSObject, ObservableObject {
         damageCount += 1
         if hasShield {
             hasShield = false
-            announce("Щит поглотил удар", duration: 2)
+            announce(A11yL10n.text("event.shield.hit", defaultValue: "Щит поглотил удар"), duration: 2, urgent: true)
         } else {
             hull -= 1
-            announce("Корпус повреждён · \(hull)/3", duration: 2)
+            announce(A11yL10n.format("event.hull.damage.format", defaultValue: "Корпус повреждён. %lld из 3", Int64(hull)),
+                     duration: 2, urgent: true)
             if hull <= 0 { finish(success: false, reason: .hull) }
         }
     }
@@ -470,16 +623,16 @@ final class GameEngine: NSObject, ObservableObject {
             switch pickup.kind {
             case .battery:
                 energy = min(100, energy + 30)
-                announce("Батарея · +30 энергии")
+                announce(A11yL10n.text("event.battery", defaultValue: "Батарея. Плюс 30 энергии"))
             case .shield:
                 hasShield = true
-                announce("Щит · защита от одного удара")
+                announce(A11yL10n.text("event.shield", defaultValue: "Щит. Защита от одного удара"))
             case .sample:
                 samples += 1
-                announce("Образец на борту · +75 к добыче")
+                announce(A11yL10n.text("event.sample", defaultValue: "Образец на борту. Плюс 75 к добыче"))
             case .blackBox:
                 hasBlackBox = true
-                announce("Чёрный ящик найден. Вернись на базу!", duration: 6)
+                announce(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!"), duration: 6)
             }
         }
     }
@@ -502,9 +655,30 @@ final class GameEngine: NSObject, ObservableObject {
         camera.y += (desired.y - camera.y) * amount
     }
 
-    private func announce(_ text: String, duration: TimeInterval = 3) {
+    func announceSectorOverview() {
+        accessibilityAnnouncer.post(sectorOverview, policy: .navigation)
+    }
+
+    private func announceThresholdsAndDocking() {
+        if energy < 25, !announcedLowEnergy {
+            announcedLowEnergy = true
+            announce(A11yL10n.text("event.energy.low", defaultValue: "Внимание. Энергия ниже 25 процентов."), guaranteed: true)
+        }
+        if hull == 1, !announcedCriticalHull {
+            announcedCriticalHull = true
+            announce(A11yL10n.text("event.hull.critical", defaultValue: "Внимание. Корпус: 1 из 3."), guaranteed: true)
+        }
+        let distanceToBase = hypot(position.x - level.base.x, position.y - level.base.y)
+        if hasBlackBox, distanceToBase < 180, !announcedDockingHint {
+            announcedDockingHint = true
+            announce(A11yL10n.text("event.docking", defaultValue: "База рядом. Остановись в круге базы для швартовки."))
+        }
+    }
+
+    private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false, guaranteed: Bool = false) {
         notice = text
         noticeRemaining = duration
+        accessibilityAnnouncer.post(text, policy: urgent ? .urgent : (guaranteed ? .navigation : .information))
     }
 
     private func finish(success: Bool, reason: FailureReason = .hull) {

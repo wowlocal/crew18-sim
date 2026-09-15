@@ -14,10 +14,20 @@
 		A10000000000000000000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* Assets.xcassets */; };
 		A10000000000000000000006 /* GameEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* GameEngineTests.swift */; };
 		A10000000000000000000007 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* XCTest.framework */; };
+		A10000000000000000000008 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* Localizable.xcstrings */; };
+		A10000000000000000000009 /* AccessibilityAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* AccessibilityAuditTests.swift */; };
+		A1000000000000000000000A /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* XCTest.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		A30000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A40000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000001;
+			remoteInfo = PodlodkaDive;
+		};
+		A30000000000000000000002 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A40000000000000000000001 /* Project object */;
 			proxyType = 1;
@@ -36,6 +46,9 @@
 		A20000000000000000000007 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 		A20000000000000000000008 /* PodlodkaDive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PodlodkaDive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000009 /* PodlodkaDiveTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PodlodkaDiveTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000000000000000000000A /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		A2000000000000000000000B /* AccessibilityAuditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityAuditTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000000C /* PodlodkaDiveUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PodlodkaDiveUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +67,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A60000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000A /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -62,6 +83,7 @@
 			children = (
 				A70000000000000000000002 /* PodlodkaDive */,
 				A70000000000000000000003 /* PodlodkaDiveTests */,
+				A70000000000000000000006 /* PodlodkaDiveUITests */,
 				A70000000000000000000004 /* Frameworks */,
 				A70000000000000000000005 /* Products */,
 			);
@@ -75,6 +97,7 @@
 				A20000000000000000000003 /* GameEngine.swift */,
 				A20000000000000000000004 /* GameCanvas.swift */,
 				A20000000000000000000005 /* Assets.xcassets */,
+				A2000000000000000000000A /* Localizable.xcstrings */,
 			);
 			path = PodlodkaDive;
 			sourceTree = "<group>";
@@ -100,8 +123,17 @@
 			children = (
 				A20000000000000000000008 /* PodlodkaDive.app */,
 				A20000000000000000000009 /* PodlodkaDiveTests.xctest */,
+				A2000000000000000000000C /* PodlodkaDiveUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A70000000000000000000006 /* PodlodkaDiveUITests */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000B /* AccessibilityAuditTests.swift */,
+			);
+			path = PodlodkaDiveUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -146,6 +178,26 @@
 			productReference = A20000000000000000000009 /* PodlodkaDiveTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		A50000000000000000000003 /* PodlodkaDiveUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000000000000000000004 /* Build configuration list for PBXNativeTarget "PodlodkaDiveUITests" */;
+			buildPhases = (
+				A90000000000000000000003 /* Sources */,
+				A60000000000000000000003 /* Frameworks */,
+				AA0000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AB0000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = PodlodkaDiveUITests;
+			packageProductDependencies = (
+			);
+			productName = PodlodkaDiveUITests;
+			productReference = A2000000000000000000000C /* PodlodkaDiveUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -158,11 +210,12 @@
 				TargetAttributes = {
 					A50000000000000000000001 = { CreatedOnToolsVersion = 26.6; };
 					A50000000000000000000002 = { CreatedOnToolsVersion = 26.6; TestTargetID = A50000000000000000000001; };
+					A50000000000000000000003 = { CreatedOnToolsVersion = 26.6; TestTargetID = A50000000000000000000001; };
 				};
 			};
 			buildConfigurationList = A80000000000000000000003 /* Build configuration list for PBXProject "PodlodkaDive" */;
 			compatibilityVersion = "Xcode 16.0";
-			developmentRegion = en;
+			developmentRegion = ru;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
@@ -178,6 +231,7 @@
 			targets = (
 				A50000000000000000000001 /* PodlodkaDive */,
 				A50000000000000000000002 /* PodlodkaDiveTests */,
+				A50000000000000000000003 /* PodlodkaDiveUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -188,10 +242,18 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000005 /* Assets.xcassets in Resources */,
+				A10000000000000000000008 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA0000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000003 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -220,6 +282,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A90000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000009 /* AccessibilityAuditTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -227,6 +297,11 @@
 			isa = PBXTargetDependency;
 			target = A50000000000000000000001 /* PodlodkaDive */;
 			targetProxy = A30000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		AB0000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000001 /* PodlodkaDive */;
+			targetProxy = A30000000000000000000002 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -319,6 +394,38 @@
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PodlodkaDive.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PodlodkaDive";
+			};
+			name = Release;
+		};
+		AC0000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.podlodka.dive.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PodlodkaDive;
+			};
+			name = Debug;
+		};
+		AC0000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.podlodka.dive.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PodlodkaDive;
 			};
 			name = Release;
 		};
@@ -455,6 +562,15 @@
 			buildConfigurations = (
 				AC0000000000000000000005 /* Debug */,
 				AC0000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000000000000000000004 /* Build configuration list for PBXNativeTarget "PodlodkaDiveUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AC0000000000000000000007 /* Debug */,
+				AC0000000000000000000008 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
