@@ -9,11 +9,14 @@ final class GameEngineTests: XCTestCase {
                    base: CGPoint(x: 180, y: 200), wreck: CGPoint(x: 1370, y: 2330))
     }
 
-    private func makeEngine(level: OceanLevel? = nil, size: CGSize = CGSize(width: 390, height: 844), defaults: UserDefaults? = nil) -> GameEngine {
+    private func makeEngine(level: OceanLevel? = nil, size: CGSize = CGSize(width: 390, height: 844),
+                            defaults: UserDefaults? = nil, randomValues: [Double] = [1]) -> GameEngine {
         let suite = "ExpeditionTests.\(UUID().uuidString)"
         let storage = defaults ?? UserDefaults(suiteName: suite)!
         if defaults == nil { addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) } }
-        let engine = GameEngine(defaults: storage, level: level ?? empty)
+        var values = randomValues
+        let engine = GameEngine(defaults: storage, level: level ?? empty,
+                                randomValue: { values.isEmpty ? 1 : values.removeFirst() })
         engine.resize(to: size)
         engine.startGame()
         return engine
@@ -157,6 +160,60 @@ final class GameEngineTests: XCTestCase {
         advance(engine, 8.1)
         XCTAssertTrue(engine.canSonar)
         XCTAssertTrue(engine.revealedPickups.contains(7), "A discovered item stays on the map")
+    }
+
+    func testPortalUsesChanceAndOnlyValidatedReachableCandidates() {
+        var level = empty
+        level.rocks = [OceanRock(id: 0, vertices: [CGPoint(x: 650, y: 650), CGPoint(x: 850, y: 650),
+                                                       CGPoint(x: 850, y: 850), CGPoint(x: 650, y: 850)])]
+        level.portalCandidates = [CGPoint(x: 750, y: 750), CGPoint(x: 520, y: 300)]
+        XCTAssertNil(makeEngine(level: level, randomValues: [0.9]).portal)
+
+        let engine = makeEngine(level: level, randomValues: [0.1, 0.8])
+        XCTAssertEqual(engine.portal?.position, CGPoint(x: 520, y: 300))
+        XCTAssertNil(level.rocks[0].contact(at: engine.portal!.position, radius: 54))
+    }
+
+    func testSonarAnnouncesPortalAndEnteringStartsBossLevel() {
+        var level = empty
+        level.portalCandidates = [level.spawn]
+        let engine = makeEngine(level: level, randomValues: [0.1, 0])
+        engine.activateSonar()
+        XCTAssertTrue(engine.portalRevealed)
+        XCTAssertTrue(engine.notice.contains("портал"))
+        advance(engine, 0.01)
+        XCTAssertEqual(engine.zone, .bossCave)
+        XCTAssertNil(engine.portal)
+        XCTAssertEqual(engine.bossTimeRemaining, GameEngine.bossDuration, accuracy: 0.6)
+        XCTAssertTrue(engine.accessibilityStatus.contains("Пещера спрута"))
+    }
+
+    func testBossAttacksAreTelegraphedAndSurvivalReturnsRewardToOcean() {
+        var level = empty
+        level.portalCandidates = [level.spawn]
+        let engine = makeEngine(level: level, randomValues: [0.1, 0])
+        advance(engine, 0.01)
+        let returnPoint = level.spawn
+        var sawWarning = false
+        for _ in 0..<300 where engine.zone == .bossCave && engine.state == .playing {
+            if let strike = engine.bossStrike, strike.phase == .warning {
+                sawWarning = true
+                let goRight = strike.position.x < GameEngine.caveSize.width / 2
+                    || engine.position.x < GameEngine.caveSize.width / 2
+                engine.setSteering(CGVector(dx: goRight ? 1 : -1, dy: 0))
+                engine.activateBoost()
+            } else if engine.bossStrike?.phase == .impact {
+                engine.setSteering(.zero)
+            }
+            advance(engine, 0.1)
+        }
+        XCTAssertTrue(sawWarning)
+        XCTAssertEqual(engine.state, .playing)
+        XCTAssertEqual(engine.zone, .ocean)
+        XCTAssertTrue(engine.bossDefeated)
+        XCTAssertEqual(engine.bossReward, 300)
+        XCTAssertEqual(engine.position.x, returnPoint.x, accuracy: 1)
+        XCTAssertTrue(engine.notice.contains("Спрут отступил"))
     }
 
     func testPauseFreezesMinesResourcesAbilitiesAndAnimation() {

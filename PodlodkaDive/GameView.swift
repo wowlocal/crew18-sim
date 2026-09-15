@@ -42,8 +42,13 @@ struct GameView: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onChange(of: scenePhase) { _, phase in if phase != .active { engine.pause() } }
+        .onChange(of: engine.announcementCount) { _, _ in
+            guard !engine.notice.isEmpty, UIAccessibility.isVoiceOverRunning else { return }
+            UIAccessibility.post(notification: .announcement, argument: engine.notice)
+        }
         .sensoryFeedback(.selection, trigger: engine.pickupCount)
         .sensoryFeedback(.error, trigger: engine.damageCount)
+        .sensoryFeedback(.warning, trigger: engine.eventCount)
         .sensoryFeedback(.success, trigger: engine.state == .completed)
         .preferredColorScheme(.dark)
     }
@@ -130,17 +135,23 @@ struct GameView: View {
         VStack(spacing: 12) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("ЭКСПЕДИЦИЯ 01 · \(engine.depth) М")
+                    Text(engine.zone == .bossCave ? "БОНУСНЫЙ УРОВЕНЬ · ПЕЩЕРА" : "ЭКСПЕДИЦИЯ 01 · \(engine.depth) М")
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .tracking(1.2).foregroundStyle(OceanPalette.muted)
-                    Text(engine.hasBlackBox ? "Вернись на базу" : "Найди чёрный ящик")
+                    Text(engine.objectiveText)
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
                         .foregroundStyle(engine.hasBlackBox ? OceanPalette.teal : OceanPalette.white)
                         .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .allowsHitTesting(false)
                 Spacer(minLength: 0)
-                hudButton("map", label: "Карта экспедиции", id: "openMap") { engine.pause(); showingMap = true }
+                hudButton("ear", label: "Озвучить обстановку", id: "speakSurroundings") {
+                    UIAccessibility.post(notification: .announcement,
+                                         argument: "\(engine.accessibilityStatus) \(engine.accessibilitySurroundings)")
+                }
+                if engine.zone == .ocean {
+                    hudButton("map", label: "Карта экспедиции", id: "openMap") { engine.pause(); showingMap = true }
+                }
                 hudButton("pause.fill", label: "Пауза", id: "pauseDive", action: engine.pause)
             }
             HStack(spacing: 13) {
@@ -173,13 +184,17 @@ struct GameView: View {
             HStack(spacing: 6) {
                 Image(systemName: "location.north.fill")
                     .rotationEffect(.radians(atan2(engine.target.y - engine.position.y, engine.target.x - engine.position.x) + .pi / 2))
-                Text("\(engine.hasBlackBox ? "БАЗА" : "СИГНАЛ") · \(engine.targetDistance) М")
+                Text(engine.zone == .bossCave
+                     ? "СПРУТ · \(Int(ceil(engine.bossTimeRemaining))) С"
+                     : "\(engine.hasBlackBox ? "БАЗА" : "СИГНАЛ") · \(engine.targetDistance) М")
                     .tracking(1)
                 Spacer()
-                if engine.hasBlackBox { Label("ЯЩИК НА БОРТУ", systemImage: "checkmark").foregroundStyle(OceanPalette.teal) }
+                if engine.zone == .ocean, engine.hasBlackBox { Label("ЯЩИК НА БОРТУ", systemImage: "checkmark").foregroundStyle(OceanPalette.teal) }
             }
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
             .foregroundStyle(OceanPalette.gold.opacity(0.85)).allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(engine.accessibilitySurroundings)
             Spacer()
         }
         .padding(.horizontal, 22).padding(.top, max(insets.top, 48) + 9)
@@ -213,6 +228,7 @@ struct GameView: View {
                     .padding(.horizontal, 15).padding(.vertical, 9)
                     .background(OceanPalette.ink.opacity(0.85), in: Capsule())
                     .padding(.horizontal, 16).allowsHitTesting(false)
+                    .accessibilityAddTraits(.updatesFrequently)
             }
             HStack(alignment: .center, spacing: 0) {
                 SteeringPad(onInput: engine.setSteering)
@@ -287,6 +303,7 @@ struct GameView: View {
                     mapKey("battery.100percent", "Батарея", OceanPalette.teal)
                     mapKey("shield", "Щит", OceanPalette.blue)
                     mapKey("diamond", "Образец", OceanPalette.gold)
+                    if engine.portalRevealed { mapKey("circle.hexagongrid", "Портал", OceanPalette.portal) }
                 }
             }
             Text("Сонар отмечает находки. Линия — пройденный путь.")
@@ -388,8 +405,17 @@ private final class SteeringSurface: UIView {
         backgroundColor = .clear
         isMultipleTouchEnabled = true
         isAccessibilityElement = true
-        accessibilityLabel = "Руль подлодки. Тяни в нужном направлении. Отпусти, чтобы остановиться."
+        accessibilityLabel = "Руль подлодки"
+        accessibilityHint = "Смахните вверх или вниз, чтобы выбрать действие: плыть в четырёх направлениях или остановиться."
+        accessibilityValue = "остановлена"
         accessibilityIdentifier = "steeringPad"
+        accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: "Плыть вверх", target: self, selector: #selector(steerUp)),
+            UIAccessibilityCustomAction(name: "Плыть вниз", target: self, selector: #selector(steerDown)),
+            UIAccessibilityCustomAction(name: "Плыть влево", target: self, selector: #selector(steerLeft)),
+            UIAccessibilityCustomAction(name: "Плыть вправо", target: self, selector: #selector(steerRight)),
+            UIAccessibilityCustomAction(name: "Остановиться", target: self, selector: #selector(stopSteering))
+        ]
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -419,7 +445,21 @@ private final class SteeringSurface: UIView {
         origin = nil
         knob = .zero
         onInput?(.zero)
+        accessibilityValue = "остановлена"
         setNeedsDisplay()
+    }
+
+    @objc private func steerUp() -> Bool { steer(CGVector(dx: 0, dy: -1), value: "курс вверх") }
+    @objc private func steerDown() -> Bool { steer(CGVector(dx: 0, dy: 1), value: "курс вниз") }
+    @objc private func steerLeft() -> Bool { steer(CGVector(dx: -1, dy: 0), value: "курс влево") }
+    @objc private func steerRight() -> Bool { steer(CGVector(dx: 1, dy: 0), value: "курс вправо") }
+    @objc private func stopSteering() -> Bool { releaseInput(); return true }
+
+    private func steer(_ vector: CGVector, value: String) -> Bool {
+        onInput?(vector)
+        accessibilityValue = value
+        UIAccessibility.post(notification: .announcement, argument: value)
+        return true
     }
 
     private func updateInput(_ point: CGPoint) {
@@ -510,6 +550,11 @@ private struct ExpeditionMap: View {
                 let rect = CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)
                 context.fill(Path(roundedRect: rect, cornerRadius: pickup.kind == .battery ? 1 : 3), with: .color(color))
             }
+            if let portal = engine.portal, engine.portalRevealed {
+                let p = point(portal.position)
+                context.stroke(Path(ellipseIn: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)),
+                               with: .color(OceanPalette.portal), lineWidth: 2)
+            }
             let base = point(engine.level.base), wreck = point(engine.level.wreck), boat = point(engine.position)
             context.stroke(Path(ellipseIn: CGRect(x: base.x - 6, y: base.y - 6, width: 12, height: 12)), with: .color(OceanPalette.teal), lineWidth: 1.4)
             context.draw(Text("БАЗА").font(.system(size: 9, weight: .medium)).foregroundStyle(OceanPalette.teal), at: CGPoint(x: base.x, y: base.y - 16))
@@ -518,7 +563,7 @@ private struct ExpeditionMap: View {
             context.fill(Path(ellipseIn: CGRect(x: boat.x - 4, y: boat.y - 4, width: 8, height: 8)), with: .color(.white))
             context.stroke(Path(ellipseIn: CGRect(x: boat.x - 8, y: boat.y - 8, width: 16, height: 16)), with: .color(.white.opacity(0.4)), lineWidth: 1)
         }
-        .accessibilityLabel("Карта сектора: база на северо-западе, корабль на юго-востоке. Между рифами есть западный обход и центральный путь через мины.")
+        .accessibilityLabel("Карта сектора. \(engine.accessibilitySurroundings) Между рифами есть западный обход и центральный путь через мины.")
     }
 }
 
