@@ -77,6 +77,32 @@ final class GameEngineTests: XCTestCase {
         }
     }
 
+    func testVoiceOverButtonsMoveThroughPhysicsAndStopAutomatically() {
+        for vector in [CGVector(dx: 1, dy: 0), CGVector(dx: -1, dy: 0), CGVector(dx: 0, dy: 1), CGVector(dx: 0, dy: -1)] {
+            let engine = makeEngine()
+            let initial = engine.position
+            engine.moveForVoiceOver(vector)
+            advance(engine, 0.2)
+            let displacement = (engine.position.x - initial.x) * vector.dx + (engine.position.y - initial.y) * vector.dy
+            XCTAssertGreaterThan(displacement, 2)
+            XCTAssertLessThan(engine.energy, 100)
+            advance(engine, 0.5)
+            XCTAssertEqual(engine.steering, .zero)
+            XCTAssertLessThan(engine.speed, 5)
+        }
+    }
+
+    func testAccessibilityAnnouncementsOnlyAdvanceForEvents() {
+        let engine = makeEngine()
+        let initialRevision = engine.accessibilityAnnouncementRevision
+        advance(engine, 1)
+        XCTAssertEqual(engine.accessibilityAnnouncementRevision, initialRevision)
+        engine.activateSonar()
+        XCTAssertEqual(engine.accessibilityAnnouncementRevision, initialRevision + 1)
+        advance(engine, 1)
+        XCTAssertEqual(engine.accessibilityAnnouncementRevision, initialRevision + 1)
+    }
+
     func testDiagonalInputDoesNotIncreaseTopSpeed() {
         let engine = makeEngine()
         engine.setSteering(CGVector(dx: 1, dy: 1))

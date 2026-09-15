@@ -4,6 +4,7 @@ import UIKit
 struct GameView: View {
     @StateObject private var engine: GameEngine
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @State private var showingMap = false
 
     init(engine: GameEngine = GameEngine()) {
@@ -46,6 +47,10 @@ struct GameView: View {
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.success, trigger: engine.state == .completed)
         .preferredColorScheme(.dark)
+        .onChange(of: engine.accessibilityAnnouncementRevision) { _, _ in
+            guard voiceOverEnabled, !engine.notice.isEmpty else { return }
+            UIAccessibility.post(notification: .announcement, argument: engine.notice)
+        }
     }
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
@@ -215,8 +220,13 @@ struct GameView: View {
                     .padding(.horizontal, 16).allowsHitTesting(false)
             }
             HStack(alignment: .center, spacing: 0) {
-                SteeringPad(onInput: engine.setSteering)
-                    .frame(width: 174, height: 158)
+                if voiceOverEnabled {
+                    VoiceOverSteeringControls(onMove: engine.moveForVoiceOver)
+                        .frame(width: 174, height: 158)
+                } else {
+                    SteeringPad(onInput: engine.setSteering)
+                        .frame(width: 174, height: 158)
+                }
                 Spacer(minLength: 0)
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
@@ -359,6 +369,47 @@ struct GameView: View {
                 .foregroundStyle(highlighted ? OceanPalette.white : OceanPalette.gold)
             Text(title).font(.system(size: 8, weight: .medium, design: .monospaced)).tracking(0.6).foregroundStyle(OceanPalette.muted)
         }.frame(maxWidth: .infinity)
+    }
+}
+
+/// VoiceOver exposes discrete, immediate commands instead of requiring a drag.
+/// Every tap produces a short steering pulse; speech never gates the action.
+private struct VoiceOverSteeringControls: View {
+    let onMove: (CGVector) -> Void
+
+    var body: some View {
+        VStack(spacing: 3) {
+            directionButton("ВВЕРХ", spokenLabel: "Двигаться вверх", icon: "arrow.up", id: "moveUp",
+                            vector: CGVector(dx: 0, dy: -1))
+            HStack(spacing: 38) {
+                directionButton("ВЛЕВО", spokenLabel: "Двигаться влево", icon: "arrow.left", id: "moveLeft",
+                                vector: CGVector(dx: -1, dy: 0))
+                directionButton("ВПРАВО", spokenLabel: "Двигаться вправо", icon: "arrow.right", id: "moveRight",
+                                vector: CGVector(dx: 1, dy: 0))
+            }
+            directionButton("ВНИЗ", spokenLabel: "Двигаться вниз", icon: "arrow.down", id: "moveDown",
+                            vector: CGVector(dx: 0, dy: 1))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Управление подлодкой")
+    }
+
+    private func directionButton(_ title: String, spokenLabel: String, icon: String,
+                                 id: String, vector: CGVector) -> some View {
+        Button { onMove(vector) } label: {
+            VStack(spacing: 2) {
+                Image(systemName: icon).font(.system(size: 14, weight: .bold))
+                Text(title).font(.system(size: 7, weight: .bold, design: .monospaced))
+            }
+            .foregroundStyle(OceanPalette.teal)
+            .frame(width: 60, height: 46)
+            .background(OceanPalette.ink.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(OceanPalette.teal.opacity(0.35), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(spokenLabel)
+        .accessibilityHint("Короткое перемещение через тягу подлодки")
+        .accessibilityIdentifier(id)
     }
 }
 
