@@ -28,6 +28,7 @@ struct GameCanvas: View {
                     world.translateBy(x: size.width / 2 - engine.camera.x, y: size.height / 2 - engine.camera.y)
                     drawWorld(in: &world)
                 }
+                drawLowVisibility(in: &context, size: size)
             }
             drawSubmarine(in: &context, size: size)
             if engine.sonarRemaining > 0 && engine.state != .ready { drawSonar(in: &context) }
@@ -324,6 +325,54 @@ struct GameCanvas: View {
                        with: .color(OceanPalette.teal.opacity((1 - progress) * 0.5)), lineWidth: 1.5)
     }
 
+    /// The expedition takes place after the external lighting failed: the
+    /// world remains legible only inside the submarine's headlight cone.
+    private func drawLowVisibility(in context: inout GraphicsContext, size: CGSize) {
+        let center = engine.screenPoint(engine.position)
+        let pitch = CGFloat(engine.submarineRotationRadians)
+        let direction = CGVector(dx: cos(pitch) * engine.facing, dy: sin(pitch))
+        let perpendicular = CGVector(dx: -direction.dy, dy: direction.dx)
+        let range = engine.headlightRange
+        let spread = engine.isLightBoostActive ? range * 0.43 : range * 0.36
+
+        func cone(length: CGFloat, width: CGFloat) -> Path {
+            let start = CGPoint(x: center.x + direction.dx * 24, y: center.y + direction.dy * 24)
+            let near = width * 0.08
+            let end = CGPoint(x: start.x + direction.dx * length, y: start.y + direction.dy * length)
+            var path = Path()
+            path.move(to: CGPoint(x: start.x + perpendicular.dx * near, y: start.y + perpendicular.dy * near))
+            path.addQuadCurve(to: CGPoint(x: end.x + perpendicular.dx * width, y: end.y + perpendicular.dy * width),
+                              control: CGPoint(x: start.x + direction.dx * length * 0.62 + perpendicular.dx * width * 0.48,
+                                               y: start.y + direction.dy * length * 0.62 + perpendicular.dy * width * 0.48))
+            path.addLine(to: CGPoint(x: end.x - perpendicular.dx * width, y: end.y - perpendicular.dy * width))
+            path.addQuadCurve(to: CGPoint(x: start.x - perpendicular.dx * near, y: start.y - perpendicular.dy * near),
+                              control: CGPoint(x: start.x + direction.dx * length * 0.62 - perpendicular.dx * width * 0.48,
+                                               y: start.y + direction.dy * length * 0.62 - perpendicular.dy * width * 0.48))
+            path.closeSubpath()
+            return path
+        }
+
+        context.drawLayer { darkness in
+            darkness.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color.black.opacity(0.91)))
+            darkness.blendMode = .destinationOut
+            darkness.fill(cone(length: range * 1.07, width: spread * 1.12), with: .color(.white.opacity(0.30)))
+            darkness.fill(cone(length: range, width: spread), with: .linearGradient(
+                Gradient(colors: [.white, .white.opacity(0.88), .white.opacity(0.38)]),
+                startPoint: center,
+                endPoint: CGPoint(x: center.x + direction.dx * range, y: center.y + direction.dy * range)))
+            let haloRadius: CGFloat = engine.isLightBoostActive ? 116 : 72
+            darkness.fill(Path(ellipseIn: CGRect(x: center.x - haloRadius, y: center.y - haloRadius,
+                                                 width: haloRadius * 2, height: haloRadius * 2)),
+                          with: .radialGradient(Gradient(colors: [.white, .white.opacity(0.78), .clear]),
+                                                center: center, startRadius: 12, endRadius: haloRadius))
+        }
+
+        context.fill(cone(length: range, width: spread), with: .linearGradient(
+            Gradient(colors: [OceanPalette.gold.opacity(engine.isLightBoostActive ? 0.12 : 0.07), .clear]),
+            startPoint: center,
+            endPoint: CGPoint(x: center.x + direction.dx * range, y: center.y + direction.dy * range)))
+    }
+
     private func drawText(_ text: String, at point: CGPoint, color: Color, in context: inout GraphicsContext) {
         context.draw(Text(text).font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(color), at: point)
     }
@@ -363,14 +412,18 @@ struct GameCanvas: View {
             layer.rotate(by: .radians(ready ? -0.055 : engine.submarineRotationRadians * Double(facing)))
             layer.scaleBy(x: boatScale * facing, y: boatScale)
             if !ready && engine.invulnerability > 0 { layer.opacity = reduceMotion ? 0.65 : 0.45 + abs(sin(time * 18)) * 0.55 }
+            let beamLength: CGFloat = ready ? 186 : engine.headlightRange / boatScale
+            let beamSpread: CGFloat = ready ? 59 : beamLength * (engine.isLightBoostActive ? 0.43 : 0.36)
             var beam = Path()
             beam.move(to: CGPoint(x: 32, y: -3))
-            beam.addLine(to: CGPoint(x: 186, y: -59))
-            beam.addQuadCurve(to: CGPoint(x: 186, y: 59), control: CGPoint(x: 207, y: 0))
+            beam.addLine(to: CGPoint(x: beamLength, y: -beamSpread))
+            beam.addQuadCurve(to: CGPoint(x: beamLength, y: beamSpread),
+                              control: CGPoint(x: beamLength * 1.1, y: 0))
             beam.addLine(to: CGPoint(x: 32, y: 6))
             beam.closeSubpath()
-            layer.fill(beam, with: .linearGradient(Gradient(colors: [OceanPalette.gold.opacity(0.12), .clear]),
-                startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: 180, y: 0)))
+            layer.fill(beam, with: .linearGradient(
+                Gradient(colors: [OceanPalette.gold.opacity(engine.isLightBoostActive ? 0.22 : 0.12), .clear]),
+                startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: beamLength, y: 0)))
 
             let darkGold = Color(red: 0.63, green: 0.34, blue: 0.12)
             var fin = Path()

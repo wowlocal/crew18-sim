@@ -46,6 +46,10 @@ struct GameView: View {
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.success, trigger: engine.state == .completed)
         .preferredColorScheme(.dark)
+        .onChange(of: engine.announcementCount) { _, _ in
+            guard !engine.notice.isEmpty, UIAccessibility.isVoiceOverRunning else { return }
+            UIAccessibility.post(notification: .announcement, argument: engine.notice)
+        }
     }
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
@@ -70,7 +74,7 @@ struct GameView: View {
                     .font(.system(size: size.height < 720 ? 35 : 41, weight: .bold, design: .rounded))
                     .tracking(-1.5).foregroundStyle(OceanPalette.white)
                     .minimumScaleFactor(0.7).lineLimit(1)
-                Text("Найди чёрный ящик. Вернись с добычей.")
+                Text("Аварийная темнота. Найди чёрный ящик и вернись.")
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(OceanPalette.muted)
                     .multilineTextAlignment(.center)
             }
@@ -85,7 +89,7 @@ struct GameView: View {
                 HStack(spacing: 0) {
                     instruction(icon: "arrow.up.and.down.and.arrow.left.and.right", title: "Свободный курс", detail: "Тяни стик в любую сторону")
                     Rectangle().fill(OceanPalette.teal.opacity(0.15)).frame(width: 1, height: 48)
-                    instruction(icon: "dot.radiowaves.left.and.right", title: "Сонар и форсаж", detail: "Ищи. Маневрируй. Исследуй.")
+                    instruction(icon: "flashlight.on.fill", title: "Свет и сонар", detail: "Усиливай фары. Ищи путь.")
                 }
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
@@ -139,7 +143,11 @@ struct GameView: View {
                         .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Бортовые приборы")
+                .accessibilityValue(engine.accessibilityStatus)
                 Spacer(minLength: 0)
+                hudButton("ear", label: "Озвучить обстановку", id: "describeSurroundings", action: engine.reportSurroundings)
                 hudButton("map", label: "Карта экспедиции", id: "openMap") { engine.pause(); showingMap = true }
                 hudButton("pause.fill", label: "Пауза", id: "pauseDive", action: engine.pause)
             }
@@ -180,6 +188,8 @@ struct GameView: View {
             }
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
             .foregroundStyle(OceanPalette.gold.opacity(0.85)).allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Цель: \(engine.hasBlackBox ? "база" : "чёрный ящик"), расстояние \(engine.targetDistance) метров")
             Spacer()
         }
         .padding(.horizontal, 22).padding(.top, max(insets.top, 48) + 9)
@@ -217,8 +227,24 @@ struct GameView: View {
             HStack(alignment: .center, spacing: 0) {
                 SteeringPad(onInput: engine.setSteering)
                     .frame(width: 174, height: 158)
+                    .accessibilityHint("Используй действия VoiceOver, чтобы выбрать курс или остановиться")
+                    .accessibilityAction(named: Text("Курс вверх")) { engine.setSteering(CGVector(dx: 0, dy: -1)) }
+                    .accessibilityAction(named: Text("Курс вниз")) { engine.setSteering(CGVector(dx: 0, dy: 1)) }
+                    .accessibilityAction(named: Text("Курс влево")) { engine.setSteering(CGVector(dx: -1, dy: 0)) }
+                    .accessibilityAction(named: Text("Курс вправо")) { engine.setSteering(CGVector(dx: 1, dy: 0)) }
+                    .accessibilityAction(named: Text("Остановиться")) { engine.setSteering(.zero) }
                 Spacer(minLength: 0)
-                VStack(spacing: 12) {
+                VStack(spacing: 7) {
+                    LightBoostButton(
+                        detail: engine.isLightBoostActive
+                            ? "Ещё \(Int(ceil(engine.lightBoostRemaining))) с"
+                            : (engine.lightBoostCooldown > 0 ? "Заряд \(Int(ceil(engine.lightBoostCooldown))) с" : "−5 энергии"),
+                        progress: 1 - engine.lightBoostCooldown / GameEngine.lightBoostRecharge,
+                        active: engine.isLightBoostActive,
+                        enabled: engine.canLightBoost,
+                        action: engine.activateLightBoost
+                    )
+                    .accessibilityIdentifier("lightBoost")
                     HStack(spacing: 12) {
                         AbilityButton(icon: "dot.radiowaves.left.and.right", title: "СОНАР",
                                       detail: engine.sonarCooldown > 0 ? "\(Int(ceil(engine.sonarCooldown))) с" : "Поиск",
@@ -478,6 +504,45 @@ private struct AbilityButton: View {
     }
 }
 
+private struct LightBoostButton: View {
+    let detail: String
+    let progress: Double
+    let active: Bool
+    let enabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: active ? "flashlight.on.fill" : "flashlight.off.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(active ? "УСИЛЕННЫЙ СВЕТ" : "УСИЛИТЬ ФАРЫ")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    Text(detail).font(.system(size: 8))
+                }
+                Spacer(minLength: 2)
+                Circle()
+                    .trim(from: 0, to: min(1, max(0, progress)))
+                    .stroke(OceanPalette.gold.opacity(enabled || active ? 0.9 : 0.35),
+                            style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 14, height: 14)
+            }
+            .foregroundStyle(OceanPalette.gold.opacity(enabled || active ? 1 : 0.45))
+            .padding(.horizontal, 10)
+            .frame(width: 140, height: 39)
+            .background(OceanPalette.ink.opacity(0.88), in: Capsule())
+            .overlay(Capsule().stroke(OceanPalette.gold.opacity(active ? 0.65 : 0.2), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled && !active)
+        .accessibilityLabel("Усилить свет фар")
+        .accessibilityValue(active ? "Активно, \(detail)" : detail)
+        .accessibilityHint("Удваивает дальность и ширину света на четыре секунды")
+    }
+}
+
 private struct ExpeditionMap: View {
     @ObservedObject var engine: GameEngine
     var body: some View {
@@ -519,6 +584,7 @@ private struct ExpeditionMap: View {
             context.stroke(Path(ellipseIn: CGRect(x: boat.x - 8, y: boat.y - 8, width: 16, height: 16)), with: .color(.white.opacity(0.4)), lineWidth: 1)
         }
         .accessibilityLabel("Карта сектора: база на северо-западе, корабль на юго-востоке. Между рифами есть западный обход и центральный путь через мины.")
+        .accessibilityValue(engine.surroundingsDescription)
     }
 }
 

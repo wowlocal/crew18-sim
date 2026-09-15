@@ -142,6 +142,50 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(engine.boostRemaining, 0)
     }
 
+    func testHeadlightBoostExpandsVisibilityAndRespectsEnergyDurationAndCooldown() {
+        let engine = makeEngine()
+        let normalRange = engine.headlightRange
+        engine.activateLightBoost()
+        XCTAssertEqual(engine.energy, 100 - GameEngine.lightBoostCost)
+        XCTAssertTrue(engine.isLightBoostActive)
+        XCTAssertGreaterThan(engine.headlightRange, normalRange * 2)
+        XCTAssertFalse(engine.canLightBoost)
+        let energy = engine.energy
+        engine.activateLightBoost()
+        XCTAssertEqual(engine.energy, energy, "An active light boost cannot be purchased twice")
+
+        advance(engine, GameEngine.lightBoostDuration + 0.1)
+        XCTAssertFalse(engine.isLightBoostActive)
+        XCTAssertEqual(engine.headlightRange, normalRange)
+        XCTAssertFalse(engine.canLightBoost)
+        advance(engine, GameEngine.lightBoostRecharge - GameEngine.lightBoostDuration)
+        XCTAssertTrue(engine.canLightBoost)
+    }
+
+    func testHeadlightBoostTimersFreezeWhilePaused() {
+        let engine = makeEngine()
+        engine.activateLightBoost()
+        advance(engine, 0.5)
+        engine.pause()
+        let remaining = engine.lightBoostRemaining
+        let cooldown = engine.lightBoostCooldown
+        advance(engine, 30)
+        XCTAssertEqual(engine.lightBoostRemaining, remaining)
+        XCTAssertEqual(engine.lightBoostCooldown, cooldown)
+    }
+
+    func testAccessibleSurroundingsDescribeNearbyWorldEvents() {
+        var level = empty
+        level.mines = [OceanMine(id: 4, position: CGPoint(x: 390, y: 300))]
+        level.pickups = [OceanPickup(id: 7, kind: .battery, position: CGPoint(x: 300, y: 410))]
+        let engine = makeEngine(level: level)
+        let description = engine.surroundingsDescription
+        XCTAssertTrue(description.contains("Мина"))
+        XCTAssertTrue(description.contains("батарея"))
+        XCTAssertTrue(description.contains("цель"))
+        XCTAssertTrue(engine.accessibilityStatus.contains("Энергия"))
+    }
+
     func testSonarRevealsNearbyPickupsWithoutSpendingEnergy() {
         var level = empty
         level.pickups = [OceanPickup(id: 7, kind: .battery, position: CGPoint(x: 700, y: 400)),

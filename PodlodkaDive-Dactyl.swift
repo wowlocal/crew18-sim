@@ -148,6 +148,7 @@ final class GameEngine: NSObject, ObservableObject {
     @Published private(set) var bestScore: Int
     @Published private(set) var pickupCount = 0
     @Published private(set) var damageCount = 0
+    @Published private(set) var announcementCount = 0
 
     let level: OceanLevel
     private(set) var viewport = CGSize(width: 390, height: 844)
@@ -167,6 +168,8 @@ final class GameEngine: NSObject, ObservableObject {
     private(set) var distance: CGFloat = 0
     private(set) var boostRemaining: TimeInterval = 0
     private(set) var boostCooldown: TimeInterval = 0
+    private(set) var lightBoostRemaining: TimeInterval = 0
+    private(set) var lightBoostCooldown: TimeInterval = 0
     private(set) var sonarRemaining: TimeInterval = 0
     private(set) var sonarCooldown: TimeInterval = 0
     private(set) var invulnerability: TimeInterval = 0
@@ -187,6 +190,9 @@ final class GameEngine: NSObject, ObservableObject {
     static let hullRadius: CGFloat = 20
     static let cruiseSpeed: CGFloat = 96
     static let boostCost: CGFloat = 7
+    static let lightBoostCost: CGFloat = 5
+    static let lightBoostDuration: TimeInterval = 4
+    static let lightBoostRecharge: TimeInterval = 10
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition) {
@@ -209,6 +215,9 @@ final class GameEngine: NSObject, ObservableObject {
     var targetDistance: Int { Int(hypot(target.x - position.x, target.y - position.y) * 0.16) }
     var isNewRecord: Bool { state == .completed && score > bestAtStart }
     var canBoost: Bool { state == .playing && boostCooldown <= 0 && energy >= Self.boostCost }
+    var canLightBoost: Bool { state == .playing && lightBoostCooldown <= 0 && energy >= Self.lightBoostCost }
+    var isLightBoostActive: Bool { lightBoostRemaining > 0 }
+    var headlightRange: CGFloat { isLightBoostActive ? 520 : 255 }
     var canSonar: Bool { state == .playing && sonarCooldown <= 0 }
     var submarineRotationRadians: Double { Double(atan2(velocity.dy, max(55, abs(velocity.dx)))) * 0.55 }
 
@@ -238,6 +247,8 @@ final class GameEngine: NSObject, ObservableObject {
         distance = 0
         boostRemaining = 0
         boostCooldown = 0
+        lightBoostRemaining = 0
+        lightBoostCooldown = 0
         sonarRemaining = 0
         sonarCooldown = 0
         invulnerability = 0
@@ -288,6 +299,50 @@ final class GameEngine: NSObject, ObservableObject {
         revealNearby(radius: 680)
         announce("Сонар: находки отмечены на карте", duration: 2.5)
         objectWillChange.send()
+    }
+
+    func activateLightBoost() {
+        guard canLightBoost else { return }
+        energy -= Self.lightBoostCost
+        lightBoostRemaining = Self.lightBoostDuration
+        lightBoostCooldown = Self.lightBoostRecharge
+        announce("Фары усилены на 4 секунды", duration: 2.5)
+        objectWillChange.send()
+    }
+
+    func reportSurroundings() {
+        announce(surroundingsDescription, duration: 7)
+        objectWillChange.send()
+    }
+
+    var accessibilityStatus: String {
+        let light = isLightBoostActive
+            ? "усиленный свет, осталось \(Int(ceil(lightBoostRemaining))) секунд"
+            : "обычный свет, дальность \(Int(headlightRange * 0.16)) метров"
+        return "Глубина \(depth) метров. Энергия \(Int(energy)) процентов. Корпус \(hull) из 3. \(light). Цель: \(hasBlackBox ? "база" : "чёрный ящик"), \(directionDescription(to: target)), \(targetDistance) метров."
+    }
+
+    var surroundingsDescription: String {
+        var parts = ["Обстановка: цель \(directionDescription(to: target)), \(targetDistance) метров."]
+        let scanRange = max(headlightRange, sonarRemaining > 0 ? 680 : 0)
+        if let mine = mines
+            .filter({ $0.phase != .spent && hypot($0.position.x - position.x, $0.position.y - position.y) <= scanRange })
+            .min(by: { distance(to: $0.position) < distance(to: $1.position) }) {
+            parts.append("Мина \(directionDescription(to: mine.position)), \(Int(distance(to: mine.position) * 0.16)) метров.")
+        }
+        if let pickup = pickups
+            .filter({ !$0.collected && hypot($0.position.x - position.x, $0.position.y - position.y) <= scanRange })
+            .min(by: { distance(to: $0.position) < distance(to: $1.position) }) {
+            let names: [PickupKind: String] = [.battery: "батарея", .shield: "щит", .sample: "образец", .blackBox: "чёрный ящик"]
+            parts.append("\(names[pickup.kind] ?? "Находка") \(directionDescription(to: pickup.position)), \(Int(distance(to: pickup.position) * 0.16)) метров.")
+        }
+        let flow = current(at: position)
+        if hypot(flow.dx, flow.dy) > 5 {
+            let flowPoint = CGPoint(x: position.x + flow.dx, y: position.y + flow.dy)
+            parts.append("Течение несёт \(directionDescription(to: flowPoint)).")
+        }
+        if parts.count == 1 { parts.append("В освещённой зоне препятствий и находок не обнаружено.") }
+        return parts.joined(separator: " ")
     }
 
     func pause() {
@@ -355,6 +410,8 @@ final class GameEngine: NSObject, ObservableObject {
         let dt = CGFloat(delta)
         runElapsed += delta
         boostCooldown = max(0, boostCooldown - delta)
+        lightBoostCooldown = max(0, lightBoostCooldown - delta)
+        lightBoostRemaining = max(0, lightBoostRemaining - delta)
         sonarCooldown = max(0, sonarCooldown - delta)
         sonarRemaining = max(0, sonarRemaining - delta)
         invulnerability = max(0, invulnerability - delta)
@@ -495,6 +552,17 @@ final class GameEngine: NSObject, ObservableObject {
         }
     }
 
+    private func distance(to point: CGPoint) -> CGFloat {
+        hypot(point.x - position.x, point.y - position.y)
+    }
+
+    private func directionDescription(to point: CGPoint) -> String {
+        let angle = atan2(point.y - position.y, point.x - position.x)
+        let directions = ["справа", "справа снизу", "снизу", "слева снизу", "слева", "слева сверху", "сверху", "справа сверху"]
+        let normalized = (angle + .pi * 2).truncatingRemainder(dividingBy: .pi * 2)
+        return directions[Int((normalized / (.pi / 4)).rounded()) % directions.count]
+    }
+
     private func updateCamera(dt: CGFloat, snap: Bool = false) {
         let look = CGPoint(x: position.x + velocity.dx * 0.65,
                            y: position.y + velocity.dy * 0.45 + 15)
@@ -510,12 +578,14 @@ final class GameEngine: NSObject, ObservableObject {
     private func announce(_ text: String, duration: TimeInterval = 3) {
         notice = text
         noticeRemaining = duration
+        announcementCount += 1
     }
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         steering = .zero
         velocity = .zero
         boostRemaining = 0
+        lightBoostRemaining = 0
         if success {
             score = cargoValue
             if score > bestScore {
@@ -574,6 +644,7 @@ struct GameCanvas: View {
                     world.translateBy(x: size.width / 2 - engine.camera.x, y: size.height / 2 - engine.camera.y)
                     drawWorld(in: &world)
                 }
+                drawLowVisibility(in: &context, size: size)
             }
             drawSubmarine(in: &context, size: size)
             if engine.sonarRemaining > 0 && engine.state != .ready { drawSonar(in: &context) }
@@ -870,6 +941,54 @@ struct GameCanvas: View {
                        with: .color(OceanPalette.teal.opacity((1 - progress) * 0.5)), lineWidth: 1.5)
     }
 
+    /// The expedition takes place after the external lighting failed: the
+    /// world remains legible only inside the submarine's headlight cone.
+    private func drawLowVisibility(in context: inout GraphicsContext, size: CGSize) {
+        let center = engine.screenPoint(engine.position)
+        let pitch = CGFloat(engine.submarineRotationRadians)
+        let direction = CGVector(dx: cos(pitch) * engine.facing, dy: sin(pitch))
+        let perpendicular = CGVector(dx: -direction.dy, dy: direction.dx)
+        let range = engine.headlightRange
+        let spread = engine.isLightBoostActive ? range * 0.43 : range * 0.36
+
+        func cone(length: CGFloat, width: CGFloat) -> Path {
+            let start = CGPoint(x: center.x + direction.dx * 24, y: center.y + direction.dy * 24)
+            let near = width * 0.08
+            let end = CGPoint(x: start.x + direction.dx * length, y: start.y + direction.dy * length)
+            var path = Path()
+            path.move(to: CGPoint(x: start.x + perpendicular.dx * near, y: start.y + perpendicular.dy * near))
+            path.addQuadCurve(to: CGPoint(x: end.x + perpendicular.dx * width, y: end.y + perpendicular.dy * width),
+                              control: CGPoint(x: start.x + direction.dx * length * 0.62 + perpendicular.dx * width * 0.48,
+                                               y: start.y + direction.dy * length * 0.62 + perpendicular.dy * width * 0.48))
+            path.addLine(to: CGPoint(x: end.x - perpendicular.dx * width, y: end.y - perpendicular.dy * width))
+            path.addQuadCurve(to: CGPoint(x: start.x - perpendicular.dx * near, y: start.y - perpendicular.dy * near),
+                              control: CGPoint(x: start.x + direction.dx * length * 0.62 - perpendicular.dx * width * 0.48,
+                                               y: start.y + direction.dy * length * 0.62 - perpendicular.dy * width * 0.48))
+            path.closeSubpath()
+            return path
+        }
+
+        context.drawLayer { darkness in
+            darkness.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color.black.opacity(0.91)))
+            darkness.blendMode = .destinationOut
+            darkness.fill(cone(length: range * 1.07, width: spread * 1.12), with: .color(.white.opacity(0.30)))
+            darkness.fill(cone(length: range, width: spread), with: .linearGradient(
+                Gradient(colors: [.white, .white.opacity(0.88), .white.opacity(0.38)]),
+                startPoint: center,
+                endPoint: CGPoint(x: center.x + direction.dx * range, y: center.y + direction.dy * range)))
+            let haloRadius: CGFloat = engine.isLightBoostActive ? 116 : 72
+            darkness.fill(Path(ellipseIn: CGRect(x: center.x - haloRadius, y: center.y - haloRadius,
+                                                 width: haloRadius * 2, height: haloRadius * 2)),
+                          with: .radialGradient(Gradient(colors: [.white, .white.opacity(0.78), .clear]),
+                                                center: center, startRadius: 12, endRadius: haloRadius))
+        }
+
+        context.fill(cone(length: range, width: spread), with: .linearGradient(
+            Gradient(colors: [OceanPalette.gold.opacity(engine.isLightBoostActive ? 0.12 : 0.07), .clear]),
+            startPoint: center,
+            endPoint: CGPoint(x: center.x + direction.dx * range, y: center.y + direction.dy * range)))
+    }
+
     private func drawText(_ text: String, at point: CGPoint, color: Color, in context: inout GraphicsContext) {
         context.draw(Text(text).font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(color), at: point)
     }
@@ -909,14 +1028,18 @@ struct GameCanvas: View {
             layer.rotate(by: .radians(ready ? -0.055 : engine.submarineRotationRadians * Double(facing)))
             layer.scaleBy(x: boatScale * facing, y: boatScale)
             if !ready && engine.invulnerability > 0 { layer.opacity = reduceMotion ? 0.65 : 0.45 + abs(sin(time * 18)) * 0.55 }
+            let beamLength: CGFloat = ready ? 186 : engine.headlightRange / boatScale
+            let beamSpread: CGFloat = ready ? 59 : beamLength * (engine.isLightBoostActive ? 0.43 : 0.36)
             var beam = Path()
             beam.move(to: CGPoint(x: 32, y: -3))
-            beam.addLine(to: CGPoint(x: 186, y: -59))
-            beam.addQuadCurve(to: CGPoint(x: 186, y: 59), control: CGPoint(x: 207, y: 0))
+            beam.addLine(to: CGPoint(x: beamLength, y: -beamSpread))
+            beam.addQuadCurve(to: CGPoint(x: beamLength, y: beamSpread),
+                              control: CGPoint(x: beamLength * 1.1, y: 0))
             beam.addLine(to: CGPoint(x: 32, y: 6))
             beam.closeSubpath()
-            layer.fill(beam, with: .linearGradient(Gradient(colors: [OceanPalette.gold.opacity(0.12), .clear]),
-                startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: 180, y: 0)))
+            layer.fill(beam, with: .linearGradient(
+                Gradient(colors: [OceanPalette.gold.opacity(engine.isLightBoostActive ? 0.22 : 0.12), .clear]),
+                startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: beamLength, y: 0)))
 
             let darkGold = Color(red: 0.63, green: 0.34, blue: 0.12)
             var fin = Path()
@@ -1011,6 +1134,10 @@ struct ContentView: View {
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.success, trigger: engine.state == .completed)
         .preferredColorScheme(.dark)
+        .onChange(of: engine.announcementCount) { _, _ in
+            guard !engine.notice.isEmpty, UIAccessibility.isVoiceOverRunning else { return }
+            UIAccessibility.post(notification: .announcement, argument: engine.notice)
+        }
     }
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
@@ -1035,7 +1162,7 @@ struct ContentView: View {
                     .font(.system(size: size.height < 720 ? 35 : 41, weight: .bold, design: .rounded))
                     .tracking(-1.5).foregroundStyle(OceanPalette.white)
                     .minimumScaleFactor(0.7).lineLimit(1)
-                Text("Найди чёрный ящик. Вернись с добычей.")
+                Text("Аварийная темнота. Найди чёрный ящик и вернись.")
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(OceanPalette.muted)
                     .multilineTextAlignment(.center)
             }
@@ -1050,7 +1177,7 @@ struct ContentView: View {
                 HStack(spacing: 0) {
                     instruction(icon: "arrow.up.and.down.and.arrow.left.and.right", title: "Свободный курс", detail: "Тяни стик в любую сторону")
                     Rectangle().fill(OceanPalette.teal.opacity(0.15)).frame(width: 1, height: 48)
-                    instruction(icon: "dot.radiowaves.left.and.right", title: "Сонар и форсаж", detail: "Ищи. Маневрируй. Исследуй.")
+                    instruction(icon: "flashlight.on.fill", title: "Свет и сонар", detail: "Усиливай фары. Ищи путь.")
                 }
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
@@ -1104,7 +1231,11 @@ struct ContentView: View {
                         .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Бортовые приборы")
+                .accessibilityValue(engine.accessibilityStatus)
                 Spacer(minLength: 0)
+                hudButton("ear", label: "Озвучить обстановку", id: "describeSurroundings", action: engine.reportSurroundings)
                 hudButton("map", label: "Карта экспедиции", id: "openMap") { engine.pause(); showingMap = true }
                 hudButton("pause.fill", label: "Пауза", id: "pauseDive", action: engine.pause)
             }
@@ -1145,6 +1276,8 @@ struct ContentView: View {
             }
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
             .foregroundStyle(OceanPalette.gold.opacity(0.85)).allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Цель: \(engine.hasBlackBox ? "база" : "чёрный ящик"), расстояние \(engine.targetDistance) метров")
             Spacer()
         }
         .padding(.horizontal, 22).padding(.top, max(insets.top, 48) + 9)
@@ -1182,8 +1315,24 @@ struct ContentView: View {
             HStack(alignment: .center, spacing: 0) {
                 SteeringPad(onInput: engine.setSteering)
                     .frame(width: 174, height: 158)
+                    .accessibilityHint("Используй действия VoiceOver, чтобы выбрать курс или остановиться")
+                    .accessibilityAction(named: Text("Курс вверх")) { engine.setSteering(CGVector(dx: 0, dy: -1)) }
+                    .accessibilityAction(named: Text("Курс вниз")) { engine.setSteering(CGVector(dx: 0, dy: 1)) }
+                    .accessibilityAction(named: Text("Курс влево")) { engine.setSteering(CGVector(dx: -1, dy: 0)) }
+                    .accessibilityAction(named: Text("Курс вправо")) { engine.setSteering(CGVector(dx: 1, dy: 0)) }
+                    .accessibilityAction(named: Text("Остановиться")) { engine.setSteering(.zero) }
                 Spacer(minLength: 0)
-                VStack(spacing: 12) {
+                VStack(spacing: 7) {
+                    LightBoostButton(
+                        detail: engine.isLightBoostActive
+                            ? "Ещё \(Int(ceil(engine.lightBoostRemaining))) с"
+                            : (engine.lightBoostCooldown > 0 ? "Заряд \(Int(ceil(engine.lightBoostCooldown))) с" : "−5 энергии"),
+                        progress: 1 - engine.lightBoostCooldown / GameEngine.lightBoostRecharge,
+                        active: engine.isLightBoostActive,
+                        enabled: engine.canLightBoost,
+                        action: engine.activateLightBoost
+                    )
+                    .accessibilityIdentifier("lightBoost")
                     HStack(spacing: 12) {
                         AbilityButton(icon: "dot.radiowaves.left.and.right", title: "СОНАР",
                                       detail: engine.sonarCooldown > 0 ? "\(Int(ceil(engine.sonarCooldown))) с" : "Поиск",
@@ -1443,6 +1592,45 @@ private struct AbilityButton: View {
     }
 }
 
+private struct LightBoostButton: View {
+    let detail: String
+    let progress: Double
+    let active: Bool
+    let enabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: active ? "flashlight.on.fill" : "flashlight.off.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(active ? "УСИЛЕННЫЙ СВЕТ" : "УСИЛИТЬ ФАРЫ")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    Text(detail).font(.system(size: 8))
+                }
+                Spacer(minLength: 2)
+                Circle()
+                    .trim(from: 0, to: min(1, max(0, progress)))
+                    .stroke(OceanPalette.gold.opacity(enabled || active ? 0.9 : 0.35),
+                            style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 14, height: 14)
+            }
+            .foregroundStyle(OceanPalette.gold.opacity(enabled || active ? 1 : 0.45))
+            .padding(.horizontal, 10)
+            .frame(width: 140, height: 39)
+            .background(OceanPalette.ink.opacity(0.88), in: Capsule())
+            .overlay(Capsule().stroke(OceanPalette.gold.opacity(active ? 0.65 : 0.2), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled && !active)
+        .accessibilityLabel("Усилить свет фар")
+        .accessibilityValue(active ? "Активно, \(detail)" : detail)
+        .accessibilityHint("Удваивает дальность и ширину света на четыре секунды")
+    }
+}
+
 private struct ExpeditionMap: View {
     @ObservedObject var engine: GameEngine
     var body: some View {
@@ -1484,6 +1672,7 @@ private struct ExpeditionMap: View {
             context.stroke(Path(ellipseIn: CGRect(x: boat.x - 8, y: boat.y - 8, width: 16, height: 16)), with: .color(.white.opacity(0.4)), lineWidth: 1)
         }
         .accessibilityLabel("Карта сектора: база на северо-западе, корабль на юго-востоке. Между рифами есть западный обход и центральный путь через мины.")
+        .accessibilityValue(engine.surroundingsDescription)
     }
 }
 
