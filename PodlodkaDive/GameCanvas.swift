@@ -5,13 +5,15 @@ enum OceanPalette {
     static let teal = Color(red: 0.38, green: 0.89, blue: 0.80)
     static let gold = Color(red: 1, green: 0.77, blue: 0.33)
     static let muted = Color(red: 0.56, green: 0.72, blue: 0.75)
-    static let white = Color(red: 0.91, green: 0.96, blue: 0.93)
+    static let white = Color.white
     static let danger = Color(red: 1, green: 0.43, blue: 0.35)
     static let blue = Color(red: 0.4, green: 0.72, blue: 1)
+    static let portal = Color(red: 0.75, green: 0.43, blue: 1)
 }
 
 struct GameCanvas: View {
     @ObservedObject var engine: GameEngine
+    let nightExpedition: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var time: Double { reduceMotion ? 0 : engine.elapsed }
 
@@ -26,8 +28,10 @@ struct GameCanvas: View {
             } else {
                 context.drawLayer { world in
                     world.translateBy(x: size.width / 2 - engine.camera.x, y: size.height / 2 - engine.camera.y)
-                    drawWorld(in: &world)
+                    if engine.zone == .bossCave { drawBossCave(in: &world) }
+                    else { drawWorld(in: &world) }
                 }
+                drawLowVisibility(in: &context, size: size)
             }
             drawSubmarine(in: &context, size: size)
             if engine.sonarRemaining > 0 && engine.state != .ready { drawSonar(in: &context) }
@@ -111,6 +115,9 @@ struct GameCanvas: View {
         if visible.insetBy(dx: -120, dy: -120).contains(engine.level.wreck) { drawWreck(in: &context) }
         for pickup in engine.pickups where !pickup.collected && visible.contains(pickup.position) { drawPickup(pickup, in: &context) }
         for mine in engine.mines where visible.contains(mine.position) { drawMine(mine, in: &context) }
+        if let portal = engine.portal, visible.insetBy(dx: -60, dy: -60).contains(portal.position) {
+            drawPortal(portal, in: &context)
+        }
         // Small schools belong to the world, making camera movement easy to read.
         for group in 0..<15 {
             let origin = CGPoint(x: CGFloat((group * 347 + 430) % 1450), y: CGFloat(group * 173 + 310))
@@ -121,6 +128,83 @@ struct GameCanvas: View {
                 context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 8, height: 3)), with: .color(OceanPalette.teal.opacity(0.2)))
             }
         }
+    }
+
+    private func drawPortal(_ portal: OceanPortal, in context: inout GraphicsContext) {
+        let p = portal.position
+        let pulse = reduceMotion ? 0 : CGFloat(sin(time * 2.8)) * 5
+        for index in 0..<3 {
+            let radius = 25 + CGFloat(index) * 12 + pulse
+            context.stroke(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)),
+                           with: .color(OceanPalette.portal.opacity(0.75 - Double(index) * 0.18)),
+                           style: StrokeStyle(lineWidth: 3 - CGFloat(index) * 0.6, dash: index == 2 ? [5, 6] : []))
+        }
+        context.fill(Path(ellipseIn: CGRect(x: p.x - 20, y: p.y - 20, width: 40, height: 40)),
+                     with: .radialGradient(Gradient(colors: [OceanPalette.white.opacity(0.8), OceanPalette.portal.opacity(0.35), .clear]),
+                                          center: p, startRadius: 1, endRadius: 22))
+        if engine.portalRevealed || hypot(engine.position.x - p.x, engine.position.y - p.y) < 200 {
+            drawText("ПОРТАЛ · ПЕЩЕРА", at: CGPoint(x: p.x, y: p.y + 58), color: OceanPalette.portal, in: &context)
+        }
+    }
+
+    private func drawBossCave(in context: inout GraphicsContext) {
+        let size = GameEngine.caveSize
+        context.fill(Path(CGRect(origin: .zero, size: size)), with: .linearGradient(
+            Gradient(colors: [Color(red: 0.16, green: 0.05, blue: 0.20), OceanPalette.ink, Color(red: 0.04, green: 0.02, blue: 0.09)]),
+            startPoint: .zero, endPoint: CGPoint(x: size.width, y: size.height)))
+        let wallColor = OceanPalette.portal.opacity(0.18)
+        for side in [CGFloat(0), size.width - 52] {
+            var wall = Path()
+            wall.move(to: CGPoint(x: side == 0 ? 0 : size.width, y: 0))
+            for index in 0...10 {
+                let y = CGFloat(index) * size.height / 10
+                wall.addLine(to: CGPoint(x: side + (side == 0 ? 38 : 14) + CGFloat((index * 17) % 28), y: y))
+            }
+            wall.addLine(to: CGPoint(x: side == 0 ? 0 : size.width, y: size.height))
+            wall.closeSubpath()
+            context.fill(wall, with: .color(wallColor))
+        }
+        drawOctopus(in: &context)
+        if let strike = engine.bossStrike {
+            let radius: CGFloat = 112
+            let rect = CGRect(x: strike.position.x - radius, y: strike.position.y - radius, width: radius * 2, height: radius * 2)
+            switch strike.phase {
+            case .warning:
+                let urgency = 1 - strike.timer / 1.45
+                context.fill(Path(ellipseIn: rect), with: .color(OceanPalette.danger.opacity(0.08 + urgency * 0.13)))
+                context.stroke(Path(ellipseIn: rect), with: .color(OceanPalette.danger),
+                               style: StrokeStyle(lineWidth: 3, dash: [7, 5]))
+                drawText("УДАР!", at: CGPoint(x: strike.position.x, y: strike.position.y - radius - 14), color: OceanPalette.danger, in: &context)
+            case .impact:
+                context.fill(Path(ellipseIn: rect), with: .color(OceanPalette.danger.opacity(0.28)))
+                var tentacle = Path()
+                tentacle.move(to: CGPoint(x: size.width / 2, y: 165))
+                tentacle.addQuadCurve(to: strike.position, control: CGPoint(x: strike.position.x + 110, y: strike.position.y - 170))
+                context.stroke(tentacle, with: .color(OceanPalette.portal), style: StrokeStyle(lineWidth: 27, lineCap: .round))
+                context.stroke(tentacle, with: .color(OceanPalette.white.opacity(0.24)), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+            }
+        }
+    }
+
+    private func drawOctopus(in context: inout GraphicsContext) {
+        let center = CGPoint(x: GameEngine.caveSize.width / 2, y: 135)
+        let sway = reduceMotion ? 0 : CGFloat(sin(time * 1.4)) * 9
+        context.fill(Path(ellipseIn: CGRect(x: center.x - 78, y: center.y - 66, width: 156, height: 132)),
+                     with: .radialGradient(Gradient(colors: [OceanPalette.portal, Color(red: 0.31, green: 0.08, blue: 0.34)]),
+                                          center: CGPoint(x: center.x - 20, y: center.y - 18), startRadius: 5, endRadius: 105))
+        for index in 0..<6 {
+            let start = CGPoint(x: center.x - 60 + CGFloat(index) * 24, y: center.y + 43)
+            var tentacle = Path()
+            tentacle.move(to: start)
+            tentacle.addQuadCurve(to: CGPoint(x: start.x - 45 + CGFloat(index) * 17 + sway, y: 315 + CGFloat(index % 2) * 35),
+                                  control: CGPoint(x: start.x + (index.isMultiple(of: 2) ? -50 : 50), y: 235))
+            context.stroke(tentacle, with: .color(OceanPalette.portal.opacity(0.8)), style: StrokeStyle(lineWidth: 18, lineCap: .round))
+        }
+        for x in [center.x - 28, center.x + 28] {
+            context.fill(Path(ellipseIn: CGRect(x: x - 11, y: center.y - 17, width: 22, height: 29)), with: .color(OceanPalette.gold))
+            context.fill(Path(ellipseIn: CGRect(x: x - 4, y: center.y - 8, width: 8, height: 14)), with: .color(OceanPalette.ink))
+        }
+        drawText("ГИГАНТСКИЙ СПРУТ", at: CGPoint(x: center.x, y: 78), color: OceanPalette.portal, in: &context)
     }
 
     private func drawRock(_ rock: OceanRock, in context: inout GraphicsContext) {
@@ -236,7 +320,7 @@ struct GameCanvas: View {
 
     private func drawPickup(_ pickup: OceanPickup, in context: inout GraphicsContext) {
         let p = CGPoint(x: pickup.position.x, y: pickup.position.y + CGFloat(sin(time * 1.8 + Double(pickup.id))) * 3)
-        let color: Color = pickup.kind == .shield ? OceanPalette.blue : (pickup.kind == .battery ? OceanPalette.teal : OceanPalette.gold)
+        let color: Color = pickup.kind == .crystal ? .cyan : pickup.kind == .shield ? OceanPalette.blue : (pickup.kind == .battery ? OceanPalette.teal : OceanPalette.gold)
         context.fill(Path(ellipseIn: CGRect(x: p.x - 32, y: p.y - 32, width: 64, height: 64)),
                      with: .radialGradient(Gradient(colors: [color.opacity(0.17), .clear]), center: p, startRadius: 2, endRadius: 32))
         switch pickup.kind {
@@ -255,7 +339,7 @@ struct GameCanvas: View {
             shield.closeSubpath()
             context.fill(shield, with: .color(color.opacity(0.15)))
             context.stroke(shield, with: .color(color), lineWidth: 1.5)
-        case .sample:
+        case .sample, .crystal:
             var crystal = Path()
             crystal.addLines([CGPoint(x: p.x, y: p.y - 12), CGPoint(x: p.x + 9, y: p.y), CGPoint(x: p.x, y: p.y + 12), CGPoint(x: p.x - 9, y: p.y)])
             crystal.closeSubpath()
@@ -269,7 +353,7 @@ struct GameCanvas: View {
             context.fill(Path(CGRect(x: p.x + 9, y: p.y - 10, width: 4, height: 20)), with: .color(color))
             context.fill(Path(ellipseIn: CGRect(x: p.x - 2, y: p.y - 2, width: 4, height: 4)), with: .color(OceanPalette.teal))
         }
-        let labels: [PickupKind: String] = [.battery: "+30 ЭНЕРГИИ", .shield: "ЩИТ", .sample: "ОБРАЗЕЦ · 75", .blackBox: "ЧЁРНЫЙ ЯЩИК"]
+        let labels: [PickupKind: String] = [.crystal: "+10 КРИСТАЛЛОВ", .battery: "+30 ЭНЕРГИИ", .shield: "ЩИТ", .sample: "ОБРАЗЕЦ · 75", .blackBox: "ЧЁРНЫЙ ЯЩИК"]
         if hypot(engine.position.x - p.x, engine.position.y - p.y) < 200 || pickup.kind == .blackBox {
             drawText(labels[pickup.kind] ?? "", at: CGPoint(x: p.x, y: p.y + 31), color: color, in: &context)
         }
@@ -324,6 +408,54 @@ struct GameCanvas: View {
                        with: .color(OceanPalette.teal.opacity((1 - progress) * 0.5)), lineWidth: 1.5)
     }
 
+    /// The expedition takes place after the external lighting failed: the
+    /// world remains legible only inside the submarine's headlight cone.
+    private func drawLowVisibility(in context: inout GraphicsContext, size: CGSize) {
+        let center = engine.screenPoint(engine.position)
+        let pitch = CGFloat(engine.submarineRotationRadians)
+        let direction = CGVector(dx: cos(pitch) * engine.facing, dy: sin(pitch))
+        let perpendicular = CGVector(dx: -direction.dy, dy: direction.dx)
+        let range = engine.headlightRange
+        let spread = engine.isLightBoostActive ? range * 0.43 : range * 0.36
+
+        func cone(length: CGFloat, width: CGFloat) -> Path {
+            let start = CGPoint(x: center.x + direction.dx * 24, y: center.y + direction.dy * 24)
+            let near = width * 0.08
+            let end = CGPoint(x: start.x + direction.dx * length, y: start.y + direction.dy * length)
+            var path = Path()
+            path.move(to: CGPoint(x: start.x + perpendicular.dx * near, y: start.y + perpendicular.dy * near))
+            path.addQuadCurve(to: CGPoint(x: end.x + perpendicular.dx * width, y: end.y + perpendicular.dy * width),
+                              control: CGPoint(x: start.x + direction.dx * length * 0.62 + perpendicular.dx * width * 0.48,
+                                               y: start.y + direction.dy * length * 0.62 + perpendicular.dy * width * 0.48))
+            path.addLine(to: CGPoint(x: end.x - perpendicular.dx * width, y: end.y - perpendicular.dy * width))
+            path.addQuadCurve(to: CGPoint(x: start.x - perpendicular.dx * near, y: start.y - perpendicular.dy * near),
+                              control: CGPoint(x: start.x + direction.dx * length * 0.62 - perpendicular.dx * width * 0.48,
+                                               y: start.y + direction.dy * length * 0.62 - perpendicular.dy * width * 0.48))
+            path.closeSubpath()
+            return path
+        }
+
+        context.drawLayer { darkness in
+            darkness.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color.black.opacity(0.91)))
+            darkness.blendMode = .destinationOut
+            darkness.fill(cone(length: range * 1.07, width: spread * 1.12), with: .color(.white.opacity(0.30)))
+            darkness.fill(cone(length: range, width: spread), with: .linearGradient(
+                Gradient(colors: [.white, .white.opacity(0.88), .white.opacity(0.38)]),
+                startPoint: center,
+                endPoint: CGPoint(x: center.x + direction.dx * range, y: center.y + direction.dy * range)))
+            let haloRadius: CGFloat = engine.isLightBoostActive ? 116 : 72
+            darkness.fill(Path(ellipseIn: CGRect(x: center.x - haloRadius, y: center.y - haloRadius,
+                                                 width: haloRadius * 2, height: haloRadius * 2)),
+                          with: .radialGradient(Gradient(colors: [.white, .white.opacity(0.78), .clear]),
+                                                center: center, startRadius: 12, endRadius: haloRadius))
+        }
+
+        context.fill(cone(length: range, width: spread), with: .linearGradient(
+            Gradient(colors: [OceanPalette.gold.opacity(engine.isLightBoostActive ? 0.12 : 0.07), .clear]),
+            startPoint: center,
+            endPoint: CGPoint(x: center.x + direction.dx * range, y: center.y + direction.dy * range)))
+    }
+
     private func drawText(_ text: String, at point: CGPoint, color: Color, in context: inout GraphicsContext) {
         context.draw(Text(text).font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(color), at: point)
     }
@@ -363,15 +495,28 @@ struct GameCanvas: View {
             layer.rotate(by: .radians(ready ? -0.055 : engine.submarineRotationRadians * Double(facing)))
             layer.scaleBy(x: boatScale * facing, y: boatScale)
             if !ready && engine.invulnerability > 0 { layer.opacity = reduceMotion ? 0.65 : 0.45 + abs(sin(time * 18)) * 0.55 }
+            if !nightExpedition {
+            let beamLength: CGFloat = ready ? 186 : engine.headlightRange / boatScale
+            let beamSpread: CGFloat = ready ? 59 : beamLength * (engine.isLightBoostActive ? 0.43 : 0.36)
             var beam = Path()
             beam.move(to: CGPoint(x: 32, y: -3))
-            beam.addLine(to: CGPoint(x: 186, y: -59))
-            beam.addQuadCurve(to: CGPoint(x: 186, y: 59), control: CGPoint(x: 207, y: 0))
+            beam.addLine(to: CGPoint(x: beamLength, y: -beamSpread))
+            beam.addQuadCurve(to: CGPoint(x: beamLength, y: beamSpread),
+                              control: CGPoint(x: beamLength * 1.1, y: 0))
             beam.addLine(to: CGPoint(x: 32, y: 6))
             beam.closeSubpath()
-            layer.fill(beam, with: .linearGradient(Gradient(colors: [OceanPalette.gold.opacity(0.12), .clear]),
-                startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: 180, y: 0)))
+            layer.fill(beam, with: .linearGradient(
+                Gradient(colors: [OceanPalette.gold.opacity(engine.isLightBoostActive ? 0.22 : 0.12), .clear]),
+                startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: beamLength, y: 0)))
+            }
 
+            let style = engine.selectedStyle
+            let paint: Color = switch style {
+            case .classic: OceanPalette.gold
+            case .neon: .purple
+            case .flames: .red
+            case .chrome: .gray
+            }
             let darkGold = Color(red: 0.63, green: 0.34, blue: 0.12)
             var fin = Path()
             fin.move(to: CGPoint(x: -23, y: -8))
@@ -395,9 +540,28 @@ struct GameCanvas: View {
             layer.stroke(scope, with: .color(OceanPalette.gold), style: StrokeStyle(lineWidth: 4, lineCap: .round))
             layer.fill(Path(roundedRect: CGRect(x: 7, y: -43, width: 5, height: 6), cornerRadius: 1.5), with: .color(OceanPalette.ink))
             let hull = Path(roundedRect: CGRect(x: -34, y: -18, width: 72, height: 37), cornerRadius: 18.5)
-            layer.fill(hull, with: .linearGradient(Gradient(colors: [Color(red: 1, green: 0.88, blue: 0.53), OceanPalette.gold, Color(red: 0.87, green: 0.49, blue: 0.16)]),
+            layer.fill(hull, with: .linearGradient(Gradient(colors: [paint.opacity(0.6), paint, paint.opacity(0.8)]),
                 startPoint: CGPoint(x: 0, y: -18), endPoint: CGPoint(x: 0, y: 21)))
             layer.stroke(hull, with: .color(Color(red: 1, green: 0.88, blue: 0.59).opacity(0.65)), lineWidth: 0.8)
+            if style == .neon {
+                layer.stroke(hull, with: .color(OceanPalette.teal), lineWidth: 3)
+                layer.fill(Path(roundedRect: CGRect(x: -25, y: 22, width: 50, height: 4), cornerRadius: 2), with: .color(OceanPalette.teal))
+            } else if style == .flames {
+                var flames = Path()
+                flames.move(to: CGPoint(x: -30, y: 12))
+                for x in stride(from: -25, through: 20, by: 15) {
+                    flames.addLine(to: CGPoint(x: x + 12, y: -13))
+                    flames.addLine(to: CGPoint(x: x + 6, y: 12))
+                }
+                flames.closeSubpath()
+                layer.fill(flames, with: .color(OceanPalette.gold))
+            } else if style == .chrome {
+                for x: CGFloat in [-24, 14] {
+                    let speaker = Path(roundedRect: CGRect(x: x, y: -36, width: 16, height: 19), cornerRadius: 3)
+                    layer.fill(speaker, with: .color(OceanPalette.ink))
+                    layer.stroke(Path(ellipseIn: CGRect(x: x + 3, y: -32, width: 10, height: 10)), with: .color(.white), lineWidth: 2)
+                }
+            }
             let shine = Path(roundedRect: CGRect(x: -23, y: -14, width: 39, height: 3), cornerRadius: 1.5)
             layer.fill(shine, with: .color(.white.opacity(0.38)))
             for x: CGFloat in [-13, 11] {

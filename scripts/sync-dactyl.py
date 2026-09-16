@@ -3,7 +3,7 @@
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
-sources = [root / "PodlodkaDive" / name for name in ("GameEngine.swift", "GameCanvas.swift", "GameView.swift")]
+sources = [root / "PodlodkaDive" / name for name in ("GameEngine.swift", "GameCanvas.swift", "VoiceOverAnnouncer.swift", "GameView.swift")]
 imports = set()
 sections = []
 for source in sources:
