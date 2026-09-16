@@ -317,9 +317,58 @@ enum GameEvent: Equatable {
     case situation(SituationSummary)
 }
 
+/// A bounded, session-local historical record written on events and periodic reports.
+struct ExpeditionLogEntry: Identifiable {
+    enum Level: String { case event = "Событие", warning = "Опасность", error = "Ошибка", state = "Состояние" }
+    let id = UUID()
+    let date = Date()
+    let expedition: Int
+    let seconds: TimeInterval
+    let level: Level
+    let message: String
+    let snapshot: String
+    let crewPhrase: String?
+}
+
+@MainActor
+final class ExpeditionLogger {
+    private(set) var entries: [ExpeditionLogEntry] = []
+    static let capacity = 500
+
+    func record(expedition: Int, seconds: TimeInterval, level: ExpeditionLogEntry.Level,
+                message: String, snapshot: String, crewPhrase: String? = nil) {
+        entries.append(ExpeditionLogEntry(expedition: expedition, seconds: seconds,
+                                          level: level, message: message, snapshot: snapshot, crewPhrase: crewPhrase))
+        if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
+    }
+}
+
+struct JournalLeak {
+    let phrase: String
+    let startedAt: TimeInterval
+    let side: CGFloat
+}
+
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
     let events = PassthroughSubject<GameEvent, Never>()
+    let journal = ExpeditionLogger()
+    private(set) var expeditionNumber = 0
+    private(set) var journalLeak: JournalLeak?
+    private var nextLeakAt: TimeInterval = 0
+    private var nextSnapshotAt: TimeInterval = 15
+    private var leakOnLeft = false
+
+    private func log(_ message: String, level: ExpeditionLogEntry.Level = .event, phrase: String? = nil) {
+        journal.record(expedition: expeditionNumber, seconds: runElapsed, level: level,
+                       message: message, snapshot: "\(state) · \(zone) · \(accessibilityStatus)", crewPhrase: phrase)
+        if let phrase, state == .playing, runElapsed >= nextLeakAt {
+            leakOnLeft.toggle()
+            journalLeak = JournalLeak(phrase: phrase, startedAt: runElapsed, side: leakOnLeft ? -1 : 1)
+            nextLeakAt = runElapsed + 8
+        }
+    }
+
     @Published private(set) var state: RunState = .ready {
         didSet { if oldValue != state { events.send(.stateChanged(state)) } }
     }
@@ -554,6 +603,10 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func startGame() {
+        expeditionNumber += 1
+        journalLeak = nil
+        nextLeakAt = 0
+        nextSnapshotAt = 15
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
@@ -593,12 +646,15 @@ final class GameEngine: NSObject, ObservableObject {
         previousTimestamp = nil
         announcedCriticalHull = false
         announcedDockingHint = false
-        announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
         updateCamera(dt: 1, snap: true)
         state = .playing
+        log("Экспедиция началась", phrase: "Капитан: погружаемся!")
+        announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
     }
 
     func returnToMenu() {
+        log("Возвращение в меню")
+        journalLeak = nil
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -654,6 +710,7 @@ final class GameEngine: NSObject, ObservableObject {
         checkEnergyWarning()
         boostRemaining = 1.1
         boostCooldown = 4.5
+        log("Форсаж включён", phrase: "Механик: полный вперёд!")
         if energy <= 0 { finish(success: false, reason: .energy) }
         objectWillChange.send()
     }
@@ -697,6 +754,7 @@ final class GameEngine: NSObject, ObservableObject {
         steering = .zero
         accessibilityMoveRemaining = 0
         state = .paused
+        log("Экспедиция приостановлена", level: .state)
         accumulator = 0
         previousTimestamp = nil
     }
@@ -708,6 +766,7 @@ final class GameEngine: NSObject, ObservableObject {
             accumulator = 0
             previousTimestamp = nil
             state = .playing
+            log("Экспедиция продолжена", level: .state)
         } else { pause() }
     }
 
@@ -758,6 +817,12 @@ final class GameEngine: NSObject, ObservableObject {
     private func simulate(_ delta: TimeInterval) {
         let dt = CGFloat(delta)
         runElapsed += delta
+        if let leak = journalLeak, runElapsed - leak.startedAt >= 3.5 { journalLeak = nil }
+        if runElapsed >= nextSnapshotAt {
+            nextSnapshotAt = runElapsed + 15
+            log("Плановый доклад экипажа", level: .state,
+                phrase: energy <= 25 ? "Механик: бережём заряд!" : "Штурман: глубина \(depth) м")
+        }
         boostCooldown = max(0, boostCooldown - delta)
         lightBoostCooldown = max(0, lightBoostCooldown - delta)
         lightBoostRemaining = max(0, lightBoostRemaining - delta)
@@ -824,6 +889,7 @@ final class GameEngine: NSObject, ObservableObject {
         if energy <= 25 && !didWarnEnergy {
             didWarnEnergy = true
             events.send(.energyLow)
+            log("Низкий заряд: пора возвращаться", level: .warning, phrase: "Механик: бережём заряд!")
         }
     }
 
@@ -1094,6 +1160,8 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
+        log(text, level: urgent ? .warning : .event,
+            phrase: urgent ? "Экипаж: осторожно!" : "Борт: " + String(text.prefix(48)))
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
@@ -1134,11 +1202,13 @@ final class GameEngine: NSObject, ObservableObject {
                 defaults.set(score, forKey: Self.bestKey)
             }
             state = .completed
+            log("Экспедиция завершена. Доставлено: \(score)")
         } else {
             if reason == .energy { events.send(.danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась"))) }
             failureReason = reason
             score = 0
             state = .gameOver
+            log(reason == .energy ? "Энергия закончилась" : "Корпус разрушен", level: .error)
         }
     }
 

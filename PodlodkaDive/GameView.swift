@@ -11,6 +11,7 @@ struct GameView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
     @State private var showingMap = false
+    @State private var showingJournal = false
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
     @State private var showingGarage = false
     @State private var pendingStyle: SubmarineStyle?
@@ -104,6 +105,7 @@ struct GameView: View {
             focusedControl = destination
             if showingMap { announcer.describeMap() }
         }
+        .sheet(isPresented: $showingJournal) { journalPanel }
         .sheet(isPresented: $showingGarage) { garagePanel }
 
     }
@@ -188,6 +190,7 @@ struct GameView: View {
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
+                journalButton
                 Button {
                     garageMessage = ""
                     showingGarage = true
@@ -576,6 +579,39 @@ struct GameView: View {
         Label(text, systemImage: icon).font(.system(.body)).foregroundStyle(color)
     }
 
+    private var journalButton: some View {
+        Button { showingJournal = true } label: {
+            Label("Журнал экспедиции", systemImage: "book.closed")
+                .frame(maxWidth: .infinity, minHeight: 44)
+        }.accessibilityIdentifier("openJournal")
+    }
+
+    private var journalPanel: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Последние 500 записей текущего запуска приложения. Реплики за бортом — выдержки из этого журнала.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if engine.journal.entries.isEmpty {
+                    Text("Журнал пуст. Начните экспедицию.")
+                }
+                ForEach(engine.journal.entries.reversed()) { entry in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Экспедиция \(entry.expedition) · \(Int(entry.seconds)) с · \(entry.level.rawValue)")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(entry.message).font(.headline)
+                        if let phrase = entry.crewPhrase { Text(phrase).foregroundStyle(OceanPalette.teal) }
+                        Text(entry.snapshot).font(.footnote)
+                        Text(entry.date, style: .time).font(.caption2).foregroundStyle(.secondary)
+                    }.accessibilityElement(children: .combine)
+                }
+            }
+            .navigationTitle("Бортовой журнал")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { showingJournal = false } } }
+        }
+    }
+
     private var resultPanel: some View {
         let paused = engine.state == .paused
         let success = engine.state == .completed
@@ -629,6 +665,7 @@ struct GameView: View {
                         .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.teal)
                         .accessibilityLabel(A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"))
                 }
+                journalButton
                 Button { showingMap = false; engine.returnToMenu() } label: {
                     Text("На поверхность").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 }

@@ -60,6 +60,50 @@ final class GameEngineTests: XCTestCase {
         advance(engine, 0.5, fps: fps)
     }
 
+    func testJournalLeakIsThrottledExpiresAndFreezesOnPause() {
+        let engine = makeEngine()
+        XCTAssertEqual(engine.journalLeak?.phrase, "Капитан: погружаемся!")
+        engine.activateBoost()
+        engine.activateSonar()
+        XCTAssertEqual(engine.journalLeak?.phrase, "Капитан: погружаемся!")
+        XCTAssertTrue(engine.journal.entries.contains { $0.message == "Форсаж включён" })
+        engine.pause()
+        let time = engine.runElapsed
+        advance(engine, 10)
+        XCTAssertEqual(engine.runElapsed, time)
+        XCTAssertNotNil(engine.journalLeak)
+        engine.togglePause()
+        advance(engine, 4)
+        XCTAssertNil(engine.journalLeak)
+        advance(engine, 12)
+        XCTAssertTrue(engine.journalLeak?.phrase.hasPrefix("Штурман:") == true)
+        XCTAssertTrue(engine.journal.entries.contains { $0.level == .state && $0.message == "Плановый доклад экипажа" })
+    }
+
+    func testJournalRetainsRunsAndRecordsFailureSnapshot() {
+        let engine = makeEngine()
+        engine.prepareAccessibilityAuditState("gameOver")
+        let failure = engine.journal.entries.last!
+        XCTAssertEqual(failure.level, .error)
+        XCTAssertEqual(failure.message, "Энергия закончилась")
+        XCTAssertTrue(failure.snapshot.contains("gameOver"))
+        engine.startGame()
+        XCTAssertEqual(engine.expeditionNumber, 3)
+        XCTAssertTrue(engine.journal.entries.contains { $0.id == failure.id })
+        XCTAssertEqual(engine.journalLeak?.startedAt, 0)
+    }
+
+    func testJournalEvictsOldestRecordsAtCapacity() {
+        let logger = ExpeditionLogger()
+        for index in 0..<510 {
+            logger.record(expedition: 1, seconds: Double(index), level: .event,
+                          message: "Event \(index)", snapshot: "State")
+        }
+        XCTAssertEqual(logger.entries.count, 500)
+        XCTAssertEqual(logger.entries.first?.message, "Event 10")
+        XCTAssertEqual(logger.entries.last?.message, "Event 509")
+    }
+
     func testAccessibilityClockBearingUsesScreenClockFace() {
         let origin = CGPoint(x: 100, y: 100)
         XCTAssertEqual(AccessibilityNavigation.clockHour(from: origin, to: CGPoint(x: 100, y: 0)), 12)
