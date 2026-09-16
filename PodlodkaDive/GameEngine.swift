@@ -60,31 +60,6 @@ enum A11yL10n {
     }
 }
 
-@MainActor
-private final class AccessibilityAnnouncer {
-    enum Policy { case information, navigation, urgent }
-
-    private var lastInformationTime: CFTimeInterval = -.infinity
-
-    func post(_ message: String, policy: Policy) {
-        guard UIAccessibility.isVoiceOverRunning else { return }
-        let now = CACurrentMediaTime()
-        if policy == .information {
-            guard now - lastInformationTime >= 2 else { return }
-            lastInformationTime = now
-        }
-        if policy == .urgent {
-            let spoken = NSMutableAttributedString(string: message)
-            spoken.addAttribute(.accessibilitySpeechQueueAnnouncement,
-                                value: false,
-                                range: NSRange(location: 0, length: spoken.length))
-            UIAccessibility.post(notification: .announcement, argument: spoken)
-        } else {
-            UIAccessibility.post(notification: .announcement, argument: message)
-        }
-    }
-}
-
 struct OceanPickup: Identifiable {
     let id: Int
     let kind: PickupKind
@@ -214,9 +189,58 @@ struct OceanLevel {
     }
 }
 
+enum CompassCourse: Int, CaseIterable, Equatable {
+    case n, ne, e, se, s, sw, w, nw
+    var label: String { ["север", "северо-восток", "восток", "юго-восток", "юг", "юго-запад", "запад", "северо-запад"][rawValue] }
+    var vector: CGVector { steeringVector(for: self) }
+    init(vector: CGVector) {
+        let angle = atan2(vector.dx, -vector.dy)
+        self = Self(rawValue: (Int((angle / (.pi / 4)).rounded()) + 8) % 8)!
+    }
+}
+
+func steeringVector(for course: CompassCourse) -> CGVector {
+    let angle = CGFloat(course.rawValue) * .pi / 4
+    return CGVector(dx: sin(angle), dy: -cos(angle))
+}
+
+struct SituationSummary: Equatable {
+    struct Contact: Equatable {
+        let id: String
+        let name: String
+        let distance: Int
+        let course: CompassCourse
+    }
+    let depth: Int
+    let speed: Int
+    let returning: Bool
+    let targetDistance: Int
+    let targetCourse: CompassCourse
+    let danger: Contact?
+    let find: Contact?
+    let currentCourse: CompassCourse?
+    let currentSpeed: Int
+}
+
+enum GameEvent: Equatable {
+    case speak(String)
+    case danger(String)
+    case energyLow
+    case stateChanged(RunState)
+    case objectiveChanged(Bool)
+    case success(Int)
+    case record(Int)
+    case situation(SituationSummary)
+}
+
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
-    @Published private(set) var state: RunState = .ready
+    let events = PassthroughSubject<GameEvent, Never>()
+    @Published private(set) var state: RunState = .ready {
+        didSet { if oldValue != state { events.send(.stateChanged(state)) } }
+    }
+    private var didWarnEnergy = false
+    private var summaryTicks = 0
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var bestScore: Int
     @Published private(set) var pickupCount = 0
@@ -255,8 +279,6 @@ final class GameEngine: NSObject, ObservableObject {
     private var displayLink: CADisplayLink?
     private var previousTimestamp: CFTimeInterval?
     private var accumulator: TimeInterval = 0
-    private let accessibilityAnnouncer = AccessibilityAnnouncer()
-    private var announcedLowEnergy = false
     private var announcedCriticalHull = false
     private var announcedDockingHint = false
     private let defaults: UserDefaults
@@ -347,6 +369,8 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func startGame() {
+        didWarnEnergy = false
+        summaryTicks = 0
         position = level.spawn
         velocity = .zero
         steering = .zero
@@ -371,7 +395,6 @@ final class GameEngine: NSObject, ObservableObject {
         trail = [position]
         accumulator = 0
         previousTimestamp = nil
-        announcedLowEnergy = false
         announcedCriticalHull = false
         announcedDockingHint = false
         announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
@@ -421,6 +444,7 @@ final class GameEngine: NSObject, ObservableObject {
             ? CGVector(dx: steering.dx / length, dy: steering.dy / length)
             : CGVector(dx: facing, dy: 0)
         energy -= Self.boostCost
+        checkEnergyWarning()
         boostRemaining = 1.1
         boostCooldown = 4.5
         if energy <= 0 { finish(success: false, reason: .energy) }
@@ -522,6 +546,7 @@ final class GameEngine: NSObject, ObservableObject {
         let thrustCost: CGFloat = boosted ? 1.8 : inputStrength * 1.15
         energy = max(0, energy - thrustCost * dt)
 
+        checkEnergyWarning()
         resolveRocks()
         guard state == .playing else { return }
         constrainToOcean()
@@ -540,6 +565,45 @@ final class GameEngine: NSObject, ObservableObject {
         revealNearby(radius: sonarRemaining > 0 ? 680 : 240)
         announceThresholdsAndDocking()
         updateCamera(dt: dt)
+        summaryTicks += 1
+        if state == .playing && summaryTicks % 30 == 0 { events.send(.situation(situationSummary)) }
+    }
+
+    private func checkEnergyWarning() {
+        if energy <= 25 && !didWarnEnergy {
+            didWarnEnergy = true
+            events.send(.energyLow)
+        }
+    }
+
+    var situationSummary: SituationSummary {
+        func contact(_ id: String, _ name: String, _ point: CGPoint) -> SituationSummary.Contact {
+            let delta = CGVector(dx: point.x - position.x, dy: point.y - position.y)
+            return .init(id: id, name: name, distance: Int(hypot(delta.dx, delta.dy) * 0.16), course: CompassCourse(vector: delta))
+        }
+        var dangers = mines.filter { $0.phase != .spent }.map { contact("mine:\($0.id)", "Мина", $0.position) }
+        // Closest point on each reef edge, rather than its centre, describes the obstacle ahead.
+        for rock in level.rocks {
+            var points: [CGPoint] = []
+            for i in rock.vertices.indices {
+                let a = rock.vertices[i], b = rock.vertices[(i + 1) % rock.vertices.count]
+                let dx = b.x - a.x, dy = b.y - a.y
+                let t = min(1, max(0, ((position.x - a.x) * dx + (position.y - a.y) * dy) / max(0.001, dx * dx + dy * dy)))
+                points.append(CGPoint(x: a.x + t * dx, y: a.y + t * dy))
+            }
+            if let point = points.min(by: { hypot($0.x - position.x, $0.y - position.y) < hypot($1.x - position.x, $1.y - position.y) }) {
+                dangers.append(contact("rock:\(rock.id)", "Риф", point))
+            }
+        }
+        let finds = pickups.filter { !$0.collected && revealedPickups.contains($0.id) }.map {
+            contact("pickup:\($0.id)", [PickupKind.battery: "Батарея", .shield: "Щит", .sample: "Образец", .blackBox: "Чёрный ящик"][$0.kind]!, $0.position)
+        }
+        let flow = current(at: position)
+        return SituationSummary(depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
+            targetDistance: targetDistance, targetCourse: CompassCourse(vector: CGVector(dx: target.x - position.x, dy: target.y - position.y)),
+            danger: dangers.min { $0.distance < $1.distance }, find: finds.min { $0.distance < $1.distance },
+            currentCourse: hypot(flow.dx, flow.dy) > 0.1 ? CompassCourse(vector: flow) : nil,
+            currentSpeed: Int(hypot(flow.dx, flow.dy) * 0.16))
     }
 
     private func resolveRocks() {
@@ -632,6 +696,7 @@ final class GameEngine: NSObject, ObservableObject {
                 announce(A11yL10n.text("event.sample", defaultValue: "Образец на борту. Плюс 75 к добыче"))
             case .blackBox:
                 hasBlackBox = true
+                events.send(.objectiveChanged(true))
                 announce(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!"), duration: 6)
             }
         }
@@ -656,14 +721,10 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func announceSectorOverview() {
-        accessibilityAnnouncer.post(sectorOverview, policy: .navigation)
+        events.send(.speak(sectorOverview))
     }
 
     private func announceThresholdsAndDocking() {
-        if energy < 25, !announcedLowEnergy {
-            announcedLowEnergy = true
-            announce(A11yL10n.text("event.energy.low", defaultValue: "Внимание. Энергия ниже 25 процентов."), guaranteed: true)
-        }
         if hull == 1, !announcedCriticalHull {
             announcedCriticalHull = true
             announce(A11yL10n.text("event.hull.critical", defaultValue: "Внимание. Корпус: 1 из 3."), guaranteed: true)
@@ -676,23 +737,27 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false, guaranteed: Bool = false) {
+        events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
-        accessibilityAnnouncer.post(text, policy: urgent ? .urgent : (guaranteed ? .navigation : .information))
     }
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
+        guard state == .playing else { return }
         steering = .zero
         velocity = .zero
         boostRemaining = 0
         if success {
             score = cargoValue
+            events.send(.success(score))
             if score > bestScore {
+                events.send(.record(score))
                 bestScore = score
                 defaults.set(score, forKey: Self.bestKey)
             }
             state = .completed
         } else {
+            if reason == .energy { events.send(.speak("Энергия закончилась")) }
             failureReason = reason
             score = 0
             state = .gameOver

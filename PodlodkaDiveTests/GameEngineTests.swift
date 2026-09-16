@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 import SwiftUI
 @testable import PodlodkaDive
 
@@ -455,4 +456,105 @@ final class GameEngineTests: XCTestCase {
             for rock in level.rocks { XCTAssertNil(rock.contact(at: p, radius: GameEngine.hullRadius), "Object inside rock at \(p)") }
         }
     }
+    func testAccessibilityPickupAndMineEventOrder() {
+        var level = empty
+        level.pickups = [.init(id: 0, kind: .battery, position: level.spawn),
+                         .init(id: 1, kind: .shield, position: level.spawn),
+                         .init(id: 2, kind: .sample, position: level.spawn),
+                         .init(id: 3, kind: .blackBox, position: level.spawn)]
+        level.mines = [.init(id: 0, position: level.spawn)]
+        let engine = makeEngine(level: level)
+        var events: [GameEvent] = []
+        let token = engine.events.sink { if case .situation = $0 {} else { events.append($0) } }
+        defer { token.cancel() }
+        engine.activateBoost()
+        advance(engine, 0.01)
+        XCTAssertEqual(events, [.speak("Мина активирована — отойди!"),
+                                .speak("Батарея · +30 энергии"), .speak("Щит · защита от одного удара"),
+                                .speak("Образец на борту · +75 к добыче"), .objectiveChanged(true),
+                                .speak("Чёрный ящик найден. Вернись на базу!")])
+        // Separate stationary fixture guarantees the mine hits rather than boosting away.
+        let stationary = makeEngine(level: level)
+        var hits: [GameEvent] = []
+        let hitToken = stationary.events.sink { if case .situation = $0 {} else { hits.append($0) } }
+        defer { hitToken.cancel() }
+        advance(stationary, 3)
+        XCTAssertEqual(hits.filter { $0 == .speak("Мина активирована — отойди!") }.count, 1)
+        XCTAssertEqual(hits.filter { $0 == .speak("Щит поглотил удар") }.count, 1)
+        XCTAssertLessThan(hits.firstIndex(of: .speak("Мина активирована — отойди!"))!, hits.firstIndex(of: .speak("Щит поглотил удар"))!)
+        level.pickups = []
+        let unshielded = makeEngine(level: level)
+        var damage: [GameEvent] = []
+        let damageToken = unshielded.events.sink { damage.append($0) }
+        defer { damageToken.cancel() }
+        advance(unshielded, 3)
+        XCTAssertEqual(damage.filter { $0 == .speak("Корпус повреждён · 2/3") }.count, 1)
+    }
+
+    func testAccessibilityEnergyWarningAndEndExactlyOncePerRun() {
+        let engine = makeEngine()
+        var events: [GameEvent] = []
+        let token = engine.events.sink { if case .situation = $0 {} else { events.append($0) } }
+        defer { token.cancel() }
+        for _ in 0..<2 {
+            engine.setSteering(CompassCourse.e.vector)
+            advance(engine, 95)
+            XCTAssertEqual(Array(events.suffix(3)), [.energyLow, .speak("Энергия закончилась"), .stateChanged(.gameOver)])
+            engine.startGame()
+        }
+        XCTAssertEqual(events.filter { $0 == .energyLow }.count, 2)
+        XCTAssertEqual(events.filter { $0 == .speak("Энергия закончилась") }.count, 2)
+    }
+
+    func testSituationDeterminismFrequencyAndCompassGeometry() {
+        var runs: [[SituationSummary]] = []
+        for fps in [30.0, 60, 120] {
+            let engine = makeEngine()
+            var summaries: [SituationSummary] = []
+            var times: [Double] = []
+            let token = engine.events.sink {
+                if case .situation(let summary) = $0 { summaries.append(summary); times.append(engine.runElapsed) }
+            }
+            engine.setSteering(CompassCourse.ne.vector)
+            advance(engine, 3, fps: fps)
+            XCTAssertEqual(summaries.count, 12)
+            for pair in zip(times, times.dropFirst()) { XCTAssertGreaterThanOrEqual(pair.1 - pair.0, 0.25 - 0.0001) }
+            let vector = CGVector(dx: engine.target.x - engine.position.x, dy: engine.target.y - engine.position.y)
+            XCTAssertEqual(summaries.last?.targetCourse, CompassCourse(vector: vector))
+            engine.pause(); advance(engine, 1, fps: fps)
+            XCTAssertEqual(summaries.count, 12)
+            token.cancel(); runs.append(summaries)
+        }
+        XCTAssertEqual(runs[0], runs[1]); XCTAssertEqual(runs[1], runs[2])
+        for course in CompassCourse.allCases {
+            XCTAssertEqual(CompassCourse(vector: course.vector), course)
+            XCTAssertEqual(hypot(course.vector.dx, course.vector.dy), 1, accuracy: 0.0001)
+        }
+    }
+
+    func testCompassAndStickUseIdenticalPhysics() {
+        let diagonal = 1 / sqrt(CGFloat(2))
+        for (course, stick) in [(CompassCourse.n, CGVector(dx: 0, dy: -1)),
+                                (.ne, CGVector(dx: diagonal, dy: -diagonal)), (.e, CGVector(dx: 1, dy: 0))] {
+            let a = makeEngine(), b = makeEngine()
+            a.setSteering(steeringVector(for: course)); b.setSteering(stick)
+            advance(a, 1); advance(b, 1)
+            XCTAssertEqual(a.position.x, b.position.x, accuracy: 0.0001)
+            XCTAssertEqual(a.position.y, b.position.y, accuracy: 0.0001)
+            XCTAssertEqual(a.energy, b.energy, accuracy: 0.0001)
+        }
+    }
+
+    func testDeliveryAndRecordEventsPrecedeCompletedOnce() {
+        var level = OceanLevel(size: empty.size, spawn: empty.spawn, base: empty.spawn, wreck: empty.wreck)
+        level.pickups = [.init(id: 0, kind: .blackBox, position: level.spawn)]
+        let engine = makeEngine(level: level)
+        var events: [GameEvent] = []
+        let token = engine.events.sink { events.append($0) }
+        defer { token.cancel() }
+        advance(engine, 1)
+        XCTAssertEqual(events, [.objectiveChanged(true), .speak("Чёрный ящик найден. Вернись на базу!"),
+                                .success(600), .record(600), .stateChanged(.completed)])
+    }
+
 }
