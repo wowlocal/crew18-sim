@@ -249,6 +249,7 @@ final class GameEngine: NSObject, ObservableObject {
     @Published private(set) var bestScore: Int
     @Published private(set) var pickupCount = 0
     @Published private(set) var damageCount = 0
+    @Published private(set) var accessibilityAnnouncementRevision = 0
 
     let level: OceanLevel
     private(set) var viewport = CGSize(width: 390, height: 844)
@@ -280,6 +281,7 @@ final class GameEngine: NSObject, ObservableObject {
     private(set) var failureReason: FailureReason = .hull
 
     private var boostDirection = CGVector(dx: 1, dy: 0)
+    private var accessibilityMoveRemaining: TimeInterval = 0
     private var displayLink: CADisplayLink?
     private var previousTimestamp: CFTimeInterval?
     private var accumulator: TimeInterval = 0
@@ -393,6 +395,7 @@ final class GameEngine: NSObject, ObservableObject {
         sonarRemaining = 0
         sonarCooldown = 0
         invulnerability = 0
+        accessibilityMoveRemaining = 0
         pickups = level.pickups
         mines = level.mines
         revealedPickups = []
@@ -409,6 +412,7 @@ final class GameEngine: NSObject, ObservableObject {
     func returnToMenu() {
         steering = .zero
         velocity = .zero
+        accessibilityMoveRemaining = 0
         state = .ready
         previousTimestamp = nil
         accumulator = 0
@@ -435,10 +439,20 @@ final class GameEngine: NSObject, ObservableObject {
 
     func setSteering(_ vector: CGVector) {
         guard state == .playing, vector.dx.isFinite, vector.dy.isFinite else { return }
+        accessibilityMoveRemaining = 0
         let length = hypot(vector.dx, vector.dy)
         if length < 0.08 { steering = .zero }
         else { steering = CGVector(dx: vector.dx / max(1, length), dy: vector.dy / max(1, length)) }
         objectWillChange.send()
+    }
+
+    /// A VoiceOver button press becomes a short burst of the regular steering
+    /// input, so movement still uses acceleration, currents, energy and collisions.
+    func moveForVoiceOver(_ vector: CGVector) {
+        guard state == .playing, vector.dx.isFinite, vector.dy.isFinite else { return }
+        setSteering(vector)
+        guard inputStrength > 0 else { return }
+        accessibilityMoveRemaining = 0.35
     }
 
     func activateBoost() {
@@ -467,6 +481,7 @@ final class GameEngine: NSObject, ObservableObject {
     func pause() {
         guard state == .playing else { return }
         steering = .zero
+        accessibilityMoveRemaining = 0
         state = .paused
         accumulator = 0
         previousTimestamp = nil
@@ -475,6 +490,7 @@ final class GameEngine: NSObject, ObservableObject {
     func togglePause() {
         if state == .paused {
             steering = .zero
+            accessibilityMoveRemaining = 0
             accumulator = 0
             previousTimestamp = nil
             state = .playing
@@ -549,6 +565,10 @@ final class GameEngine: NSObject, ObservableObject {
         if abs(drive.dx) > 12 { facing = drive.dx < 0 ? -1 : 1 }
         let thrustCost: CGFloat = boosted ? 1.8 : inputStrength * 1.15
         energy = max(0, energy - thrustCost * dt)
+        if accessibilityMoveRemaining > 0 {
+            accessibilityMoveRemaining = max(0, accessibilityMoveRemaining - delta)
+            if accessibilityMoveRemaining == 0 { steering = .zero }
+        }
 
         checkEnergyWarning()
         resolveRocks()
@@ -744,12 +764,14 @@ final class GameEngine: NSObject, ObservableObject {
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
+        accessibilityAnnouncementRevision += 1
     }
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         guard state == .playing else { return }
         steering = .zero
         velocity = .zero
+        accessibilityMoveRemaining = 0
         boostRemaining = 0
         if success {
             score = cargoValue
@@ -759,11 +781,13 @@ final class GameEngine: NSObject, ObservableObject {
                 bestScore = score
                 defaults.set(score, forKey: Self.bestKey)
             }
+            announce("Груз доставлен. Экспедиция завершена.")
             state = .completed
         } else {
             if reason == .energy { events.send(.speak("Энергия закончилась")) }
             failureReason = reason
             score = 0
+            announce(reason == .energy ? "Заряд закончился. Экспедиция завершена." : "Корпус разрушен. Экспедиция завершена.")
             state = .gameOver
         }
     }
@@ -1212,6 +1236,8 @@ struct ContentView: View {
     @StateObject private var announcer: VoiceOverAnnouncer
     @AccessibilityFocusState private var focusedControl: String?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
     @State private var showingMap = false
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
 
@@ -1343,6 +1369,10 @@ struct ContentView: View {
                 .accessibilityLabel(A11yL10n.text("a11y.start", defaultValue: "Начать экспедицию"))
                 .accessibilityHint(A11yL10n.text("a11y.start.hint", defaultValue: "Запускает экспедицию и открывает приборы управления."))
                 .accessibilityIdentifier("startDive").accessibilityFocused($focusedControl, equals: "startDive")
+                if voiceOverEnabled {
+                    Toggle("Пошаговое управление VoiceOver", isOn: $voiceOverButtons)
+                        .tint(OceanPalette.teal)
+                }
                 Toggle(isOn: $nightExpedition) {
                     Text(String(localized: "night.toggle", defaultValue: "Ночная экспедиция"))
                 }
@@ -1495,11 +1525,17 @@ struct ContentView: View {
                     .padding(.horizontal, 16).allowsHitTesting(false)
             }
             HStack(alignment: .center, spacing: 0) {
+                if voiceOverEnabled && voiceOverButtons {
+                    VoiceOverSteeringControls(onMove: engine.moveForVoiceOver)
+                        .accessibilityFocused($focusedControl, equals: "steeringPad")
+                        .frame(width: 174, height: 158)
+                } else {
                 SteeringPad(onInput: engine.setSteering, steering: engine.steering,
                             contacts: engine.sonarContacts, onSummary: { announcer.describeSurroundings() })
                     .accessibilityFocused($focusedControl, equals: "steeringPad")
                     .frame(width: 174, height: 158)
                     .accessibilitySortPriority(3)
+                }
                 Spacer(minLength: 0)
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
@@ -1702,6 +1738,47 @@ struct ContentView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityTitle)
             .accessibilityValue("\(value)")
+    }
+}
+
+/// VoiceOver exposes discrete, immediate commands instead of requiring a drag.
+/// Every tap produces a short steering pulse; speech never gates the action.
+private struct VoiceOverSteeringControls: View {
+    let onMove: (CGVector) -> Void
+
+    var body: some View {
+        VStack(spacing: 3) {
+            directionButton("ВВЕРХ", spokenLabel: "Двигаться вверх", icon: "arrow.up", id: "moveUp",
+                            vector: CGVector(dx: 0, dy: -1))
+            HStack(spacing: 38) {
+                directionButton("ВЛЕВО", spokenLabel: "Двигаться влево", icon: "arrow.left", id: "moveLeft",
+                                vector: CGVector(dx: -1, dy: 0))
+                directionButton("ВПРАВО", spokenLabel: "Двигаться вправо", icon: "arrow.right", id: "moveRight",
+                                vector: CGVector(dx: 1, dy: 0))
+            }
+            directionButton("ВНИЗ", spokenLabel: "Двигаться вниз", icon: "arrow.down", id: "moveDown",
+                            vector: CGVector(dx: 0, dy: 1))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Управление подлодкой")
+    }
+
+    private func directionButton(_ title: String, spokenLabel: String, icon: String,
+                                 id: String, vector: CGVector) -> some View {
+        Button { onMove(vector) } label: {
+            VStack(spacing: 2) {
+                Image(systemName: icon).font(.system(size: 14, weight: .bold))
+                Text(title).font(.system(size: 7, weight: .bold, design: .monospaced))
+            }
+            .foregroundStyle(OceanPalette.teal)
+            .frame(width: 60, height: 46)
+            .background(OceanPalette.ink.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(OceanPalette.teal.opacity(0.35), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(spokenLabel)
+        .accessibilityHint("Короткое перемещение через тягу подлодки")
+        .accessibilityIdentifier(id)
     }
 }
 

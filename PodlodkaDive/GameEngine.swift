@@ -245,6 +245,7 @@ final class GameEngine: NSObject, ObservableObject {
     @Published private(set) var bestScore: Int
     @Published private(set) var pickupCount = 0
     @Published private(set) var damageCount = 0
+    @Published private(set) var accessibilityAnnouncementRevision = 0
 
     let level: OceanLevel
     private(set) var viewport = CGSize(width: 390, height: 844)
@@ -276,6 +277,7 @@ final class GameEngine: NSObject, ObservableObject {
     private(set) var failureReason: FailureReason = .hull
 
     private var boostDirection = CGVector(dx: 1, dy: 0)
+    private var accessibilityMoveRemaining: TimeInterval = 0
     private var displayLink: CADisplayLink?
     private var previousTimestamp: CFTimeInterval?
     private var accumulator: TimeInterval = 0
@@ -389,6 +391,7 @@ final class GameEngine: NSObject, ObservableObject {
         sonarRemaining = 0
         sonarCooldown = 0
         invulnerability = 0
+        accessibilityMoveRemaining = 0
         pickups = level.pickups
         mines = level.mines
         revealedPickups = []
@@ -405,6 +408,7 @@ final class GameEngine: NSObject, ObservableObject {
     func returnToMenu() {
         steering = .zero
         velocity = .zero
+        accessibilityMoveRemaining = 0
         state = .ready
         previousTimestamp = nil
         accumulator = 0
@@ -431,10 +435,20 @@ final class GameEngine: NSObject, ObservableObject {
 
     func setSteering(_ vector: CGVector) {
         guard state == .playing, vector.dx.isFinite, vector.dy.isFinite else { return }
+        accessibilityMoveRemaining = 0
         let length = hypot(vector.dx, vector.dy)
         if length < 0.08 { steering = .zero }
         else { steering = CGVector(dx: vector.dx / max(1, length), dy: vector.dy / max(1, length)) }
         objectWillChange.send()
+    }
+
+    /// A VoiceOver button press becomes a short burst of the regular steering
+    /// input, so movement still uses acceleration, currents, energy and collisions.
+    func moveForVoiceOver(_ vector: CGVector) {
+        guard state == .playing, vector.dx.isFinite, vector.dy.isFinite else { return }
+        setSteering(vector)
+        guard inputStrength > 0 else { return }
+        accessibilityMoveRemaining = 0.35
     }
 
     func activateBoost() {
@@ -463,6 +477,7 @@ final class GameEngine: NSObject, ObservableObject {
     func pause() {
         guard state == .playing else { return }
         steering = .zero
+        accessibilityMoveRemaining = 0
         state = .paused
         accumulator = 0
         previousTimestamp = nil
@@ -471,6 +486,7 @@ final class GameEngine: NSObject, ObservableObject {
     func togglePause() {
         if state == .paused {
             steering = .zero
+            accessibilityMoveRemaining = 0
             accumulator = 0
             previousTimestamp = nil
             state = .playing
@@ -545,6 +561,10 @@ final class GameEngine: NSObject, ObservableObject {
         if abs(drive.dx) > 12 { facing = drive.dx < 0 ? -1 : 1 }
         let thrustCost: CGFloat = boosted ? 1.8 : inputStrength * 1.15
         energy = max(0, energy - thrustCost * dt)
+        if accessibilityMoveRemaining > 0 {
+            accessibilityMoveRemaining = max(0, accessibilityMoveRemaining - delta)
+            if accessibilityMoveRemaining == 0 { steering = .zero }
+        }
 
         checkEnergyWarning()
         resolveRocks()
@@ -740,12 +760,14 @@ final class GameEngine: NSObject, ObservableObject {
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
+        accessibilityAnnouncementRevision += 1
     }
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         guard state == .playing else { return }
         steering = .zero
         velocity = .zero
+        accessibilityMoveRemaining = 0
         boostRemaining = 0
         if success {
             score = cargoValue
@@ -755,11 +777,13 @@ final class GameEngine: NSObject, ObservableObject {
                 bestScore = score
                 defaults.set(score, forKey: Self.bestKey)
             }
+            announce("Груз доставлен. Экспедиция завершена.")
             state = .completed
         } else {
             if reason == .energy { events.send(.speak("Энергия закончилась")) }
             failureReason = reason
             score = 0
+            announce(reason == .energy ? "Заряд закончился. Экспедиция завершена." : "Корпус разрушен. Экспедиция завершена.")
             state = .gameOver
         }
     }

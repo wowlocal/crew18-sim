@@ -7,6 +7,8 @@ struct GameView: View {
     @StateObject private var announcer: VoiceOverAnnouncer
     @AccessibilityFocusState private var focusedControl: String?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
     @State private var showingMap = false
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
 
@@ -138,6 +140,10 @@ struct GameView: View {
                 .accessibilityLabel(A11yL10n.text("a11y.start", defaultValue: "Начать экспедицию"))
                 .accessibilityHint(A11yL10n.text("a11y.start.hint", defaultValue: "Запускает экспедицию и открывает приборы управления."))
                 .accessibilityIdentifier("startDive").accessibilityFocused($focusedControl, equals: "startDive")
+                if voiceOverEnabled {
+                    Toggle("Пошаговое управление VoiceOver", isOn: $voiceOverButtons)
+                        .tint(OceanPalette.teal)
+                }
                 Toggle(isOn: $nightExpedition) {
                     Text(String(localized: "night.toggle", defaultValue: "Ночная экспедиция"))
                 }
@@ -290,11 +296,17 @@ struct GameView: View {
                     .padding(.horizontal, 16).allowsHitTesting(false)
             }
             HStack(alignment: .center, spacing: 0) {
+                if voiceOverEnabled && voiceOverButtons {
+                    VoiceOverSteeringControls(onMove: engine.moveForVoiceOver)
+                        .accessibilityFocused($focusedControl, equals: "steeringPad")
+                        .frame(width: 174, height: 158)
+                } else {
                 SteeringPad(onInput: engine.setSteering, steering: engine.steering,
                             contacts: engine.sonarContacts, onSummary: { announcer.describeSurroundings() })
                     .accessibilityFocused($focusedControl, equals: "steeringPad")
                     .frame(width: 174, height: 158)
                     .accessibilitySortPriority(3)
+                }
                 Spacer(minLength: 0)
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
@@ -497,6 +509,47 @@ struct GameView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityTitle)
             .accessibilityValue("\(value)")
+    }
+}
+
+/// VoiceOver exposes discrete, immediate commands instead of requiring a drag.
+/// Every tap produces a short steering pulse; speech never gates the action.
+private struct VoiceOverSteeringControls: View {
+    let onMove: (CGVector) -> Void
+
+    var body: some View {
+        VStack(spacing: 3) {
+            directionButton("ВВЕРХ", spokenLabel: "Двигаться вверх", icon: "arrow.up", id: "moveUp",
+                            vector: CGVector(dx: 0, dy: -1))
+            HStack(spacing: 38) {
+                directionButton("ВЛЕВО", spokenLabel: "Двигаться влево", icon: "arrow.left", id: "moveLeft",
+                                vector: CGVector(dx: -1, dy: 0))
+                directionButton("ВПРАВО", spokenLabel: "Двигаться вправо", icon: "arrow.right", id: "moveRight",
+                                vector: CGVector(dx: 1, dy: 0))
+            }
+            directionButton("ВНИЗ", spokenLabel: "Двигаться вниз", icon: "arrow.down", id: "moveDown",
+                            vector: CGVector(dx: 0, dy: 1))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Управление подлодкой")
+    }
+
+    private func directionButton(_ title: String, spokenLabel: String, icon: String,
+                                 id: String, vector: CGVector) -> some View {
+        Button { onMove(vector) } label: {
+            VStack(spacing: 2) {
+                Image(systemName: icon).font(.system(size: 14, weight: .bold))
+                Text(title).font(.system(size: 7, weight: .bold, design: .monospaced))
+            }
+            .foregroundStyle(OceanPalette.teal)
+            .frame(width: 60, height: 46)
+            .background(OceanPalette.ink.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(OceanPalette.teal.opacity(0.35), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(spokenLabel)
+        .accessibilityHint("Короткое перемещение через тягу подлодки")
+        .accessibilityIdentifier(id)
     }
 }
 
