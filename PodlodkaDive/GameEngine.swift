@@ -319,9 +319,34 @@ enum GameEvent: Equatable {
 
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
+    private let journal: any ExpeditionLogging
+    private(set) var diveID: UUID?
+    private var journalOpen = false
+    private var nextSnapshot: TimeInterval = 5
+
+    private func log(_ kind: String, _ message: String, severity: String = "info") {
+        guard journalOpen, let diveID else { return }
+        journal.record(JournalEntry(id: UUID(), diveID: diveID, date: Date(), elapsed: runElapsed,
+            kind: kind, severity: severity, message: message,
+            boat: BoatSnapshot(x: Double(position.x), y: Double(position.y), energy: Double(energy),
+                hull: hull, cargo: cargoValue, blackBox: hasBlackBox, shield: hasShield,
+                zone: String(describing: zone), state: String(describing: state), speed: Double(speed))))
+    }
+
+    private func closeJournal(_ outcome: String, severity: String = "info") {
+        log("finish", outcome, severity: severity)
+        journalOpen = false
+        journal.flush()
+    }
+
     let events = PassthroughSubject<GameEvent, Never>()
     @Published private(set) var state: RunState = .ready {
-        didSet { if oldValue != state { events.send(.stateChanged(state)) } }
+        didSet {
+            if oldValue != state {
+                events.send(.stateChanged(state))
+                log("state", "Режим: \(state)")
+            }
+        }
     }
     private var didWarnEnergy = false
     private var summaryTicks = 0
@@ -399,6 +424,7 @@ final class GameEngine: NSObject, ObservableObject {
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
+         journal: any ExpeditionLogging = ExpeditionJournal.shared,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
         var saved = defaults.data(forKey: Self.garageKey)
             .flatMap { try? JSONDecoder().decode(GarageSave.self, from: $0) } ?? GarageSave()
@@ -406,6 +432,7 @@ final class GameEngine: NSObject, ObservableObject {
         saved.unlocked.insert(.classic)
         if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
         garage = saved
+        self.journal = journal
         self.defaults = defaults
         self.level = level
         self.randomValue = randomValue
@@ -554,6 +581,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func startGame() {
+        closeJournal("Экспедиция прервана: начато новое погружение")
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
@@ -593,12 +621,17 @@ final class GameEngine: NSObject, ObservableObject {
         previousTimestamp = nil
         announcedCriticalHull = false
         announcedDockingHint = false
+        diveID = UUID()
+        state = .playing
+        journalOpen = true
+        nextSnapshot = 5
+        log("start", "Дело открыто: экспедиция за чёрным ящиком")
         announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
         updateCamera(dt: 1, snap: true)
-        state = .playing
     }
 
     func returnToMenu() {
+        closeJournal("Экспедиция прервана: возвращение в меню")
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -627,11 +660,19 @@ final class GameEngine: NSObject, ObservableObject {
 #endif
 
     func setSteering(_ vector: CGVector) {
-        guard state == .playing, vector.dx.isFinite, vector.dy.isFinite else { return }
+        guard state == .playing else { return }
+        guard vector.dx.isFinite, vector.dy.isFinite else {
+            log("input.invalid", "Некорректная команда руля", severity: "error")
+            return
+        }
+        let wasMoving = inputStrength > 0
         accessibilityMoveRemaining = 0
         let length = hypot(vector.dx, vector.dy)
         if length < 0.08 { steering = .zero }
         else { steering = CGVector(dx: vector.dx / max(1, length), dy: vector.dy / max(1, length)) }
+        if wasMoving != (inputStrength > 0) {
+            log("steering", inputStrength > 0 ? "Включена тяга" : "Руль отпущен: торможение")
+        }
         objectWillChange.send()
     }
 
@@ -645,12 +686,13 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateBoost() {
-        guard canBoost else { return }
+        guard canBoost else { log("ability.rejected", "Форсаж недоступен: заряд или перезарядка", severity: "warning"); return }
         let length = inputStrength
         boostDirection = length > 0.08
             ? CGVector(dx: steering.dx / length, dy: steering.dy / length)
             : CGVector(dx: facing, dy: 0)
         energy -= Self.boostCost
+        log("boost", "Форсаж — батарейку списали: −7 энергии")
         checkEnergyWarning()
         boostRemaining = 1.1
         boostCooldown = 4.5
@@ -659,9 +701,10 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateSonar() {
-        guard canSonar else { return }
+        guard canSonar else { log("ability.rejected", "Сонар недоступен", severity: "warning"); return }
         sonarRemaining = 5
         sonarCooldown = 8
+        log("sonar", "Сонар: поиск находок")
         revealNearby(radius: 680)
         if let portal, hypot(position.x - portal.position.x, position.y - portal.position.y) < 680 {
             portalRevealed = true
@@ -673,8 +716,9 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateLightBoost() {
-        guard canLightBoost else { return }
+        guard canLightBoost else { log("ability.rejected", "Усилитель фар недоступен", severity: "warning"); return }
         energy -= Self.lightBoostCost
+        log("light", "Усилены фары: −5 энергии")
         checkEnergyWarning()
         lightBoostRemaining = Self.lightBoostDuration
         lightBoostCooldown = Self.lightBoostRecharge
@@ -697,6 +741,7 @@ final class GameEngine: NSObject, ObservableObject {
         steering = .zero
         accessibilityMoveRemaining = 0
         state = .paused
+        journal.flush()
         accumulator = 0
         previousTimestamp = nil
     }
@@ -727,7 +772,11 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func step(deltaTime raw: TimeInterval) {
-        guard raw.isFinite, raw > 0, state == .playing || state == .ready else { return }
+        guard raw.isFinite, raw > 0 else {
+            log("simulation.invalidDelta", "Некорректный шаг симуляции", severity: "error")
+            return
+        }
+        guard state == .playing || state == .ready else { return }
         let dt = min(raw, 0.1)
         if state == .playing {
             accumulator += dt
@@ -735,6 +784,10 @@ final class GameEngine: NSObject, ObservableObject {
                 simulate(Self.fixedStep)
                 accumulator = max(0, accumulator - Self.fixedStep)
             }
+        }
+        if journalOpen && runElapsed >= nextSnapshot {
+            log("snapshot", "Показания приборов")
+            nextSnapshot = runElapsed + 5
         }
         elapsed += dt
     }
@@ -823,6 +876,7 @@ final class GameEngine: NSObject, ObservableObject {
     private func checkEnergyWarning() {
         if energy <= 25 && !didWarnEnergy {
             didWarnEnergy = true
+            log("energy.low", "Осталось менее 25% энергии", severity: "warning")
             events.send(.energyLow)
         }
     }
@@ -869,7 +923,7 @@ final class GameEngine: NSObject, ObservableObject {
                 if impact < 0 {
                     velocity.dx -= hit.normal.dx * impact * 1.12
                     velocity.dy -= hit.normal.dy * impact * 1.12
-                    if -impact > 78 { takeDamage(); boostRemaining = 0 }
+                    if -impact > 78 { takeDamage(source: "reef"); boostRemaining = 0 }
                 }
             }
         }
@@ -898,8 +952,9 @@ final class GameEngine: NSObject, ObservableObject {
                 if mines[index].timer <= 0 {
                     mines[index].phase = .exploding
                     mines[index].timer = 0.65
+                    log("mine.explosion", "Взорвалась мина \(mines[index].id)", severity: "warning")
                     if distance < OceanMine.blastRadius + Self.hullRadius {
-                        takeDamage()
+                        takeDamage(source: "mine")
                         let length = max(1, distance)
                         velocity.dx += (position.x - mines[index].position.x) / length * 110
                         velocity.dy += (position.y - mines[index].position.y) / length * 110
@@ -942,6 +997,7 @@ final class GameEngine: NSObject, ObservableObject {
         velocity = .zero
         steering = .zero
         boostRemaining = 0
+        log("portal.enter", "Вход в пещеру спрута")
         bossTimeRemaining = Self.bossDuration
         bossStrikeCooldown = 1.6
         bossStrike = nil
@@ -964,7 +1020,7 @@ final class GameEngine: NSObject, ObservableObject {
                     strike.phase = .impact
                     strike.timer = 0.55
                     if hypot(strike.position.x - position.x, strike.position.y - position.y) < 112 + Self.hullRadius {
-                        takeDamage()
+                        takeDamage(source: "tentacle")
                         velocity.dx += position.x < strike.position.x ? -125 : 125
                         velocity.dy += position.y < strike.position.y ? -95 : 95
                         boostRemaining = 0
@@ -997,21 +1053,24 @@ final class GameEngine: NSObject, ObservableObject {
         accessibilityMoveRemaining = 0
         velocity = .zero
         steering = .zero
+        log("boss.reward", "Спрут побеждён: артефакт +300")
         invulnerability = 1
         eventCount += 1
         announce(A11yL10n.text("event.boss.complete", defaultValue: "Спрут отступил! Артефакт пещеры добавил 300 к добыче."), duration: 6)
         updateCamera(dt: 1, snap: true)
     }
 
-    private func takeDamage() {
+    private func takeDamage(source: String) {
         guard invulnerability <= 0, state == .playing else { return }
         invulnerability = 1.4
         damageCount += 1
         if hasShield {
             hasShield = false
+            log("shield.hit", "Щит поглотил удар: \(source)", severity: "warning")
             announce(A11yL10n.text("event.shield.hit", defaultValue: "Щит поглотил удар"), duration: 2, urgent: true)
         } else {
             hull -= 1
+            log("\(source).damage", source == "reef" ? "Обнял риф — корпус помят" : "Повреждение корпуса: \(source)", severity: "warning")
             announce(A11yL10n.format("event.hull.damage.format", defaultValue: "Корпус повреждён. %lld из 3", Int64(hull)),
                      duration: 2, urgent: true)
             if hull <= 0 { finish(success: false, reason: .hull) }
@@ -1045,6 +1104,7 @@ final class GameEngine: NSObject, ObservableObject {
                 events.send(.objectiveChanged(true))
                 announce(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!"), duration: 6)
             }
+            log("pickup.\(pickup.kind.rawValue)", pickup.kind == .blackBox ? "Чёрный ящик — с собой" : "Подобрано: \(pickup.kind.rawValue), №\(pickup.id)")
         }
     }
 
@@ -1094,6 +1154,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
+        log("notice", text, severity: urgent ? "warning" : "info")
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
@@ -1134,11 +1195,13 @@ final class GameEngine: NSObject, ObservableObject {
                 defaults.set(score, forKey: Self.bestKey)
             }
             state = .completed
+            closeJournal("Чёрный ящик доставлен. Добыча: \(score)")
         } else {
             if reason == .energy { events.send(.danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась"))) }
             failureReason = reason
             score = 0
             state = .gameOver
+            closeJournal(reason == .energy ? "Энергия закончилась. Добыча потеряна" : "Корпус разрушен. Добыча потеряна", severity: "error")
         }
     }
 
