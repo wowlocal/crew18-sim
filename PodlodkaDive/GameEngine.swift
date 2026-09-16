@@ -319,9 +319,15 @@ enum GameEvent: Equatable {
 
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
+    let captainLogger: CaptainLogger
+    private var expeditionID = UUID()
     let events = PassthroughSubject<GameEvent, Never>()
     @Published private(set) var state: RunState = .ready {
-        didSet { if oldValue != state { events.send(.stateChanged(state)) } }
+        didSet { if oldValue != state {
+            events.send(.stateChanged(state))
+            logWatch("state", "Состояние: \(oldValue) → \(state)")
+            captainLogger.flush()
+        } }
     }
     private var didWarnEnergy = false
     private var summaryTicks = 0
@@ -399,6 +405,7 @@ final class GameEngine: NSObject, ObservableObject {
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
+         captainLogger: CaptainLogger = .shared,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
         var saved = defaults.data(forKey: Self.garageKey)
             .flatMap { try? JSONDecoder().decode(GarageSave.self, from: $0) } ?? GarageSave()
@@ -406,6 +413,7 @@ final class GameEngine: NSObject, ObservableObject {
         saved.unlocked.insert(.classic)
         if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
         garage = saved
+        self.captainLogger = captainLogger
         self.defaults = defaults
         self.level = level
         self.randomValue = randomValue
@@ -554,6 +562,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func startGame() {
+        expeditionID = UUID()
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
@@ -645,7 +654,8 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateBoost() {
-        guard canBoost else { return }
+        guard canBoost else { logWatch("rejected.boost", "Форсаж недоступен"); return }
+        logWatch("boost", "Включён форсаж")
         let length = inputStrength
         boostDirection = length > 0.08
             ? CGVector(dx: steering.dx / length, dy: steering.dy / length)
@@ -659,7 +669,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateSonar() {
-        guard canSonar else { return }
+        guard canSonar else { logWatch("rejected.sonar", "Сонар перезаряжается"); return }
         sonarRemaining = 5
         sonarCooldown = 8
         revealNearby(radius: 680)
@@ -673,7 +683,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateLightBoost() {
-        guard canLightBoost else { return }
+        guard canLightBoost else { logWatch("rejected.light", "Усилитель фар недоступен"); return }
         energy -= Self.lightBoostCost
         checkEnergyWarning()
         lightBoostRemaining = Self.lightBoostDuration
@@ -817,12 +827,14 @@ final class GameEngine: NSObject, ObservableObject {
         announceThresholdsAndDocking()
         updateCamera(dt: dt)
         summaryTicks += 1
+        if state == .playing && summaryTicks % 1200 == 0 { logWatch("snapshot", "Плановая сверка приборов") }
         if state == .playing && summaryTicks % 30 == 0 { events.send(.situation(situationSummary)) }
     }
 
     private func checkEnergyWarning() {
         if energy <= 25 && !didWarnEnergy {
             didWarnEnergy = true
+            logWatch("energy.low", "Критический заряд батареи")
             events.send(.energyLow)
         }
     }
@@ -1094,10 +1106,20 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
+        logWatch(urgent ? "danger" : "event", text)
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
         accessibilityAnnouncementRevision += 1
+    }
+
+    func logWatch(_ event: String, _ message: String, reason: String = "") {
+        let sobriety = CaptainLogger.Sobriety(rawValue: defaults.string(forKey: "podlodkaDive.captainSobriety") ?? "") ?? .sober
+        captainLogger.record(event, message: message, expedition: expeditionID, sobriety: sobriety,
+                             details: ["hull": String(hull), "energy": String(Int(energy)),
+                                       "depth": String(depth), "cargo": String(cargoValue),
+                                       "seconds": String(Int(runElapsed)), "zone": String(describing: zone),
+                                       "reason": reason])
     }
 
     private func directionAndDistance(to point: CGPoint) -> String {
@@ -1120,6 +1142,7 @@ final class GameEngine: NSObject, ObservableObject {
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         guard state == .playing else { return }
+        logWatch(success ? "success" : "failure", success ? "Экспедиция доставила груз" : "Экспедиция потеряна", reason: success ? "docked" : String(describing: reason))
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0

@@ -5,6 +5,175 @@ import QuartzCore
 import SwiftUI
 import UIKit
 
+// MARK: - CaptainLogger.swift
+
+/// Queue-confined storage: encoding and disk access never run on the game/UI thread.
+final class CaptainLogger: @unchecked Sendable {
+    enum Sobriety: String, Codable, CaseIterable, Sendable {
+        case sober, tipsy, drunken
+        var title: String {
+            switch self {
+            case .sober: "Трезв как стекло"
+            case .tipsy: "Слегка навеселе"
+            case .drunken: "Совсем пьян"
+            }
+        }
+    }
+
+    struct Entry: Codable, Identifiable, Sendable {
+        let id: UUID
+        let date: Date
+        let expedition: UUID
+        let event: String
+        let sobriety: Sobriety
+        let message: String
+        let details: [String: String]
+    }
+
+    static let shared = CaptainLogger(url: URL.applicationSupportDirectory
+        .appendingPathComponent("CaptainLogger/watch-journal.json"))
+    private let queue = DispatchQueue(label: "CaptainLogger.storage", qos: .utility)
+    private let url: URL
+    private var entries: [Entry] = []
+    private var loaded = false
+    private var dirty = false
+    private var scheduled = false
+    private var storageError: String?
+    private var loadFailed = false
+    private let capacity: Int
+
+    init(url: URL, capacity: Int = 2_000) {
+        self.url = url
+        self.capacity = max(1, capacity)
+    }
+
+    func record(_ event: String, message: String, expedition: UUID,
+                sobriety: Sobriety, details: [String: String] = [:]) {
+        let prose: String
+        switch sobriety {
+        case .sober: prose = message
+        case .tipsy: prose = "Так, записываю… \(message)"
+        case .drunken:
+            prose = "\(message) Эх, нелегка служба на подлодке: потолок низкий, море со всех сторон, а до дома ещё сколько вахт… Даже чай в кружке мечтает сойти на берег."
+        }
+        let entry = Entry(id: UUID(), date: Date(), expedition: expedition, event: event,
+                          sobriety: sobriety, message: prose,
+                          details: sobriety == .sober ? details : details.filter { ["hull", "energy", "reason"].contains($0.key) })
+        queue.async {
+            self.load()
+            self.entries.append(entry)
+            self.entries = Array(self.entries.suffix(self.capacity))
+            self.dirty = true
+            guard !self.scheduled else { return }
+            self.scheduled = true
+            self.queue.asyncAfter(deadline: .now() + 1) {
+                self.scheduled = false
+                self.persist()
+            }
+        }
+    }
+
+    /// Flushes queued events before returning newest-first records. Errors remain visible to readers.
+    func read() async -> (entries: [Entry], error: String?) {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                self.load()
+                self.persist()
+                continuation.resume(returning: (self.entries.reversed(), self.storageError))
+            }
+        }
+    }
+
+    func flush() {
+        queue.async { self.load(); self.persist() }
+    }
+
+    private func load() {
+        guard !loaded else { return }
+        loaded = true
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            entries = Array(try JSONDecoder().decode([Entry].self, from: Data(contentsOf: url)).suffix(capacity))
+        } catch {
+            loadFailed = true // Never overwrite an unreadable historical journal.
+            storageError = "Не удалось прочитать журнал: \(error.localizedDescription)"
+        }
+    }
+
+    private func persist() {
+        guard dirty, !loadFailed else { return }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(entries).write(to: url, options: .atomic)
+            dirty = false
+            storageError = nil
+        } catch {
+            storageError = "Не удалось сохранить журнал: \(error.localizedDescription)"
+        }
+    }
+}
+
+struct CaptainJournalView: View {
+    let logger: CaptainLogger
+    @AppStorage("podlodkaDive.captainSobriety") private var sobriety = CaptainLogger.Sobriety.sober
+    @Environment(\.dismiss) private var dismiss
+    @State private var entries: [CaptainLogger.Entry] = []
+    @State private var storageError: String?
+    @State private var query = ""
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 20) {
+                Text("Вахтенный журнал").font(.title).accessibilityAddTraits(.isHeader)
+                Button("Готово") { dismiss() }
+                Text("Степень трезвости").font(.headline)
+                ForEach(CaptainLogger.Sobriety.allCases, id: \.self) { value in
+                    Button {
+                        sobriety = value
+                    } label: {
+                        Label(value.title, systemImage: sobriety == value ? "checkmark.circle.fill" : "circle")
+                    }
+                    .accessibilityAddTraits(sobriety == value ? .isSelected : [])
+                }
+                Text("Трезвый капитан фиксирует все приборы. Навеселе — только корпус и заряд. Пьяный ещё и рассуждает о службе.")
+                TextField("Поиск событий", text: $query).textFieldStyle(.roundedBorder)
+                Button("Обновить") { Task { await reload() } }
+                if let storageError { Text(storageError) }
+                Text("Последние записи · до 2000").font(.headline)
+                if entries.isEmpty { Text("Вахтенный журнал пока пуст.") }
+                ForEach(entries.filter { query.isEmpty || $0.message.localizedCaseInsensitiveContains(query) || $0.event.localizedCaseInsensitiveContains(query) }) { entry in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(entry.date, format: .dateTime.day().month().hour().minute().second())
+                        Text(entry.message)
+                        Text("\(entry.sobriety.title) · \(entry.event) · рейс \(entry.expedition.uuidString.prefix(8))")
+                        ForEach(entry.details.keys.sorted(), id: \.self) { key in
+                            Text("\(key): \(entry.details[key] ?? "")")
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .combine)
+                    Divider()
+                }
+            }
+            .padding(24)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+        }
+        .foregroundStyle(.black)
+        .background(.white)
+        .tint(.black)
+        .preferredColorScheme(.light)
+        .task { await reload() }
+        .refreshable { await reload() }
+    }
+
+    private func reload() async {
+        let result = await logger.read()
+        entries = result.entries
+        storageError = result.error
+    }
+}
+
 // MARK: - GameEngine.swift
 
 enum RunState: Equatable { case ready, playing, paused, gameOver, completed }
@@ -323,9 +492,15 @@ enum GameEvent: Equatable {
 
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
+    let captainLogger: CaptainLogger
+    private var expeditionID = UUID()
     let events = PassthroughSubject<GameEvent, Never>()
     @Published private(set) var state: RunState = .ready {
-        didSet { if oldValue != state { events.send(.stateChanged(state)) } }
+        didSet { if oldValue != state {
+            events.send(.stateChanged(state))
+            logWatch("state", "Состояние: \(oldValue) → \(state)")
+            captainLogger.flush()
+        } }
     }
     private var didWarnEnergy = false
     private var summaryTicks = 0
@@ -403,6 +578,7 @@ final class GameEngine: NSObject, ObservableObject {
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
+         captainLogger: CaptainLogger = .shared,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
         var saved = defaults.data(forKey: Self.garageKey)
             .flatMap { try? JSONDecoder().decode(GarageSave.self, from: $0) } ?? GarageSave()
@@ -410,6 +586,7 @@ final class GameEngine: NSObject, ObservableObject {
         saved.unlocked.insert(.classic)
         if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
         garage = saved
+        self.captainLogger = captainLogger
         self.defaults = defaults
         self.level = level
         self.randomValue = randomValue
@@ -558,6 +735,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func startGame() {
+        expeditionID = UUID()
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
@@ -649,7 +827,8 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateBoost() {
-        guard canBoost else { return }
+        guard canBoost else { logWatch("rejected.boost", "Форсаж недоступен"); return }
+        logWatch("boost", "Включён форсаж")
         let length = inputStrength
         boostDirection = length > 0.08
             ? CGVector(dx: steering.dx / length, dy: steering.dy / length)
@@ -663,7 +842,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateSonar() {
-        guard canSonar else { return }
+        guard canSonar else { logWatch("rejected.sonar", "Сонар перезаряжается"); return }
         sonarRemaining = 5
         sonarCooldown = 8
         revealNearby(radius: 680)
@@ -677,7 +856,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateLightBoost() {
-        guard canLightBoost else { return }
+        guard canLightBoost else { logWatch("rejected.light", "Усилитель фар недоступен"); return }
         energy -= Self.lightBoostCost
         checkEnergyWarning()
         lightBoostRemaining = Self.lightBoostDuration
@@ -821,12 +1000,14 @@ final class GameEngine: NSObject, ObservableObject {
         announceThresholdsAndDocking()
         updateCamera(dt: dt)
         summaryTicks += 1
+        if state == .playing && summaryTicks % 1200 == 0 { logWatch("snapshot", "Плановая сверка приборов") }
         if state == .playing && summaryTicks % 30 == 0 { events.send(.situation(situationSummary)) }
     }
 
     private func checkEnergyWarning() {
         if energy <= 25 && !didWarnEnergy {
             didWarnEnergy = true
+            logWatch("energy.low", "Критический заряд батареи")
             events.send(.energyLow)
         }
     }
@@ -1098,10 +1279,20 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
+        logWatch(urgent ? "danger" : "event", text)
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
         accessibilityAnnouncementRevision += 1
+    }
+
+    func logWatch(_ event: String, _ message: String, reason: String = "") {
+        let sobriety = CaptainLogger.Sobriety(rawValue: defaults.string(forKey: "podlodkaDive.captainSobriety") ?? "") ?? .sober
+        captainLogger.record(event, message: message, expedition: expeditionID, sobriety: sobriety,
+                             details: ["hull": String(hull), "energy": String(Int(energy)),
+                                       "depth": String(depth), "cargo": String(cargoValue),
+                                       "seconds": String(Int(runElapsed)), "zone": String(describing: zone),
+                                       "reason": reason])
     }
 
     private func directionAndDistance(to point: CGPoint) -> String {
@@ -1124,6 +1315,7 @@ final class GameEngine: NSObject, ObservableObject {
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         guard state == .playing else { return }
+        logWatch(success ? "success" : "failure", success ? "Экспедиция доставила груз" : "Экспедиция потеряна", reason: success ? "docked" : String(describing: reason))
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -1939,6 +2131,7 @@ struct ContentView: View {
     @State private var showingMap = false
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
     @State private var showingGarage = false
+    @State private var showingJournal = false
     @State private var pendingStyle: SubmarineStyle?
     @State private var garageMessage = ""
 
@@ -2010,7 +2203,7 @@ struct ContentView: View {
         .onChange(of: dynamicTypeSize) { _, _ in engine.setSteering(.zero) }
         .onChange(of: voiceOverEnabled) { _, _ in engine.setSteering(.zero) }
         .onChange(of: voiceOverButtons) { _, _ in engine.setSteering(.zero) }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { engine.pause() } }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { engine.pause(); engine.captainLogger.flush() } }
         .sensoryFeedback(.selection, trigger: engine.pickupCount)
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.warning, trigger: engine.eventCount)
@@ -2031,6 +2224,7 @@ struct ContentView: View {
             if showingMap { announcer.describeMap() }
         }
         .sheet(isPresented: $showingGarage) { garagePanel }
+        .sheet(isPresented: $showingJournal) { CaptainJournalView(logger: engine.captainLogger) }
 
     }
 
@@ -2076,6 +2270,10 @@ struct ContentView: View {
                     .accessibilityLabel(A11yL10n.format("a11y.best.format", defaultValue: "Лучшая доставленная добыча: %lld", Int64(engine.bestScore)))
             }
             .padding(.top, max(insets.top, 48) + 12)
+            Button("Вахтенный журнал") { showingJournal = true }
+                .foregroundStyle(.white).frame(minHeight: 44)
+                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
+                .buttonStyle(.bordered)
             VStack(spacing: 12) {
                 Text("СВОБОДНЫЙ ОКЕАН")
                     .font(.system(.body, design: .monospaced).weight(.semibold))
@@ -2334,6 +2532,7 @@ struct ContentView: View {
     }
 
     private func openMap() {
+        engine.logWatch("map", "Открыта карта экспедиции")
         engine.pause()
         showingMap = true
     }
@@ -2508,6 +2707,10 @@ struct ContentView: View {
         let title = paused ? "Можно выдохнуть." : (success ? "Груз доставлен." : "Океан сильнее.")
         let detail = paused ? "Экспедиция на паузе. Заряд сохраняется." : (success ? "Чёрный ящик на базе. Хорошая работа, капитан." : (engine.failureReason == .energy ? "Заряд закончился. Груз остался на глубине." : "Корпус не выдержал. Груз остался на глубине."))
         return VStack(spacing: 22) {
+            Button("Вахтенный журнал") { showingJournal = true }
+                .foregroundStyle(.white).frame(minHeight: 44)
+                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
+
             Image(systemName: paused ? "pause.fill" : (success ? "shippingbox.fill" : "water.waves"))
                 .font(.system(.title).weight(.medium)).foregroundStyle(success ? OceanPalette.gold : OceanPalette.teal)
                 .frame(width: 72, height: 72)

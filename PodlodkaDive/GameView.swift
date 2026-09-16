@@ -13,6 +13,7 @@ struct GameView: View {
     @State private var showingMap = false
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
     @State private var showingGarage = false
+    @State private var showingJournal = false
     @State private var pendingStyle: SubmarineStyle?
     @State private var garageMessage = ""
 
@@ -84,7 +85,7 @@ struct GameView: View {
         .onChange(of: dynamicTypeSize) { _, _ in engine.setSteering(.zero) }
         .onChange(of: voiceOverEnabled) { _, _ in engine.setSteering(.zero) }
         .onChange(of: voiceOverButtons) { _, _ in engine.setSteering(.zero) }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { engine.pause() } }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { engine.pause(); engine.captainLogger.flush() } }
         .sensoryFeedback(.selection, trigger: engine.pickupCount)
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.warning, trigger: engine.eventCount)
@@ -105,6 +106,7 @@ struct GameView: View {
             if showingMap { announcer.describeMap() }
         }
         .sheet(isPresented: $showingGarage) { garagePanel }
+        .sheet(isPresented: $showingJournal) { CaptainJournalView(logger: engine.captainLogger) }
 
     }
 
@@ -150,6 +152,10 @@ struct GameView: View {
                     .accessibilityLabel(A11yL10n.format("a11y.best.format", defaultValue: "Лучшая доставленная добыча: %lld", Int64(engine.bestScore)))
             }
             .padding(.top, max(insets.top, 48) + 12)
+            Button("Вахтенный журнал") { showingJournal = true }
+                .foregroundStyle(.white).frame(minHeight: 44)
+                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
+                .buttonStyle(.bordered)
             VStack(spacing: 12) {
                 Text("СВОБОДНЫЙ ОКЕАН")
                     .font(.system(.body, design: .monospaced).weight(.semibold))
@@ -408,6 +414,7 @@ struct GameView: View {
     }
 
     private func openMap() {
+        engine.logWatch("map", "Открыта карта экспедиции")
         engine.pause()
         showingMap = true
     }
@@ -582,6 +589,10 @@ struct GameView: View {
         let title = paused ? "Можно выдохнуть." : (success ? "Груз доставлен." : "Океан сильнее.")
         let detail = paused ? "Экспедиция на паузе. Заряд сохраняется." : (success ? "Чёрный ящик на базе. Хорошая работа, капитан." : (engine.failureReason == .energy ? "Заряд закончился. Груз остался на глубине." : "Корпус не выдержал. Груз остался на глубине."))
         return VStack(spacing: 22) {
+            Button("Вахтенный журнал") { showingJournal = true }
+                .foregroundStyle(.white).frame(minHeight: 44)
+                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
+
             Image(systemName: paused ? "pause.fill" : (success ? "shippingbox.fill" : "water.waves"))
                 .font(.system(.title).weight(.medium)).foregroundStyle(success ? OceanPalette.gold : OceanPalette.teal)
                 .frame(width: 72, height: 72)

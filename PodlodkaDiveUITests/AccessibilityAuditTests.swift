@@ -2,6 +2,21 @@ import XCTest
 
 final class AccessibilityAuditTests: XCTestCase {
     @MainActor
+    func testCaptainJournalCanBeReadAndConfigured() throws {
+        let app = XCUIApplication()
+        app.launch()
+        app.buttons["Вахтенный журнал"].tap()
+        XCTAssertTrue(app.staticTexts["Вахтенный журнал"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Обновить"].exists)
+        app.buttons["Совсем пьян"].tap()
+        XCTAssertTrue(app.buttons["Совсем пьян"].isSelected)
+        app.buttons["Трезв как стекло"].tap()
+        try app.performAccessibilityAudit()
+        app.buttons["Готово"].tap()
+        XCTAssertTrue(app.buttons["startDive"].exists)
+    }
+
+    @MainActor
     func testAccessibilityAuditOnEveryScreen() throws {
         for (state, control) in [("ready", "startDive"), ("playing", "pauseDive"),
                                   ("paused", "resumeDive"), ("map", "closeMap"),

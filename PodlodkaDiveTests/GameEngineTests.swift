@@ -865,3 +865,83 @@ final class GameEngineTests: XCTestCase {
 
 
 }
+
+@MainActor
+final class CaptainLoggerTests: XCTestCase {
+    private func journalURL() -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return directory.appendingPathComponent("journal.json")
+    }
+
+    func testSobrietyAndPersistentReading() async throws {
+        let url = journalURL()
+        let logger = CaptainLogger(url: url)
+        let expedition = UUID()
+        for sobriety in CaptainLogger.Sobriety.allCases {
+            logger.record("damage", message: "Корпус повреждён", expedition: expedition,
+                          sobriety: sobriety, details: ["hull": "2", "depth": "150"])
+        }
+        let result = await logger.read()
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.entries.count, 3)
+        XCTAssertTrue(result.entries[0].message.contains("нелегка служба на подлодке"))
+        XCTAssertEqual(result.entries[0].details, ["hull": "2"])
+        XCTAssertEqual(result.entries[1].sobriety, .tipsy)
+        XCTAssertEqual(result.entries[2].details["depth"], "150")
+        let reopened = await CaptainLogger(url: url).read()
+        XCTAssertNil(reopened.error)
+        XCTAssertEqual(reopened.entries.map(\.id), result.entries.map(\.id))
+        XCTAssertTrue(reopened.entries.allSatisfy { $0.expedition == expedition })
+    }
+
+    func testRetentionKeepsNewestEntries() async {
+        let logger = CaptainLogger(url: journalURL(), capacity: 2)
+        for index in 0..<5 {
+            logger.record(String(index), message: "Запись", expedition: UUID(), sobriety: .sober)
+        }
+        let result = await logger.read()
+        XCTAssertEqual(result.entries.map(\.event), ["4", "3"])
+        XCTAssertNil(result.error)
+    }
+
+    func testCorruptJournalIsNotOverwritten() async throws {
+        let url = journalURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = Data("damaged journal".utf8)
+        try original.write(to: url)
+        let logger = CaptainLogger(url: url)
+        logger.record("new", message: "Новая запись", expedition: UUID(), sobriety: .sober)
+        let result = await logger.read()
+        XCTAssertNotNil(result.error)
+        XCTAssertEqual(result.entries.count, 1)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
+    func testWriteErrorIsReadable() async throws {
+        let url = journalURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: url)
+        let logger = CaptainLogger(url: url.appendingPathComponent("impossible.json"))
+        logger.record("test", message: "Запись", expedition: UUID(), sobriety: .sober)
+        let result = await logger.read()
+        XCTAssertNotNil(result.error)
+        XCTAssertEqual(result.entries.count, 1)
+    }
+
+    func testEngineLogsFlowAndSeparatesExpeditions() async {
+        let logger = CaptainLogger(url: journalURL())
+        let engine = GameEngine(captainLogger: logger, randomValue: { 1 })
+        engine.startGame()
+        engine.activateBoost()
+        engine.activateBoost()
+        engine.pause()
+        engine.togglePause()
+        engine.startGame()
+        let result = await logger.read()
+        XCTAssertTrue(result.entries.contains { $0.event == "boost" })
+        XCTAssertTrue(result.entries.contains { $0.event == "rejected.boost" })
+        XCTAssertTrue(result.entries.contains { $0.event == "state" && $0.message.contains("paused") })
+        XCTAssertEqual(Set(result.entries.map(\.expedition)).count, 2)
+    }
+}
