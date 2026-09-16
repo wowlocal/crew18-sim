@@ -51,3 +51,26 @@ final class AccessibilityAuditTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Гараж"].waitForExistence(timeout: 5))
     }
 }
+
+extension AccessibilityAuditTests {
+    @MainActor
+    func testJournalReplayAndFlowAccessibility() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-accessibilityAuditState", "completed"]
+        app.launch()
+        XCTAssertTrue(app.buttons["openJournal"].waitForExistence(timeout: 5))
+        app.buttons["openJournal"].tap()
+        XCTAssertTrue(app.buttons["journalRun"].firstMatch.waitForExistence(timeout: 5))
+        try app.performAccessibilityAudit { issue in
+            print("Journal audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
+        app.buttons["journalRun"].firstMatch.tap()
+        XCTAssertTrue(app.sliders["replaySeek"].waitForExistence(timeout: 5))
+        app.sliders["replaySeek"].adjust(toNormalizedSliderPosition: 0.5)
+        try app.performAccessibilityAudit { issue in
+            print("Journal audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
+    }
+}

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D10000000000000000000003 = {isa = PBXBuildFile; fileRef = D20000000000000000000003; };
+		D10000000000000000000002 = {isa = PBXBuildFile; fileRef = D20000000000000000000002; };
 		D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
 		A10000000000000000000001 /* PodlodkaDiveApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* PodlodkaDiveApp.swift */; };
 		A10000000000000000000002 /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* GameView.swift */; };
@@ -38,6 +40,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D20000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBoxView.swift; sourceTree = "<group>"; };
+		D20000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBox.swift; sourceTree = "<group>"; };
 		D20000000000000000000001 /* VoiceOverAnnouncer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceOverAnnouncer.swift; sourceTree = "<group>"; };
 		A20000000000000000000001 /* PodlodkaDiveApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodlodkaDiveApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* GameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameView.swift; sourceTree = "<group>"; };
@@ -97,6 +101,8 @@
 				A20000000000000000000001 /* PodlodkaDiveApp.swift */,
 				A20000000000000000000002 /* GameView.swift */,
 				D20000000000000000000001 /* VoiceOverAnnouncer.swift */,
+                D20000000000000000000003,
+                D20000000000000000000002,
 				A20000000000000000000003 /* GameEngine.swift */,
 				A20000000000000000000004 /* GameCanvas.swift */,
 				A20000000000000000000005 /* Assets.xcassets */,
@@ -273,6 +279,8 @@
 				A10000000000000000000001 /* PodlodkaDiveApp.swift in Sources */,
 				A10000000000000000000002 /* GameView.swift in Sources */,
 				D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */,
+                D10000000000000000000003,
+                D10000000000000000000002,
 				A10000000000000000000003 /* GameEngine.swift in Sources */,
 				A10000000000000000000004 /* GameCanvas.swift in Sources */,
 			);
@@ -319,7 +327,9 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Podlodka Dive";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record captain notes as text.";
+                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Transcribe captain notes on this device.";
+                INFOPLIST_KEY_CFBundleDisplayName = "Podlodka Dive";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -347,7 +357,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Podlodka Dive";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record captain notes as text.";
+                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Transcribe captain notes on this device.";
+                INFOPLIST_KEY_CFBundleDisplayName = "Podlodka Dive";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
