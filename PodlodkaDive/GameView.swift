@@ -64,6 +64,7 @@ struct GameView: View {
         .onChange(of: scenePhase) { _, phase in if phase != .active { engine.pause() } }
         .sensoryFeedback(.selection, trigger: engine.pickupCount)
         .sensoryFeedback(.error, trigger: engine.damageCount)
+        .sensoryFeedback(.warning, trigger: engine.eventCount)
         .sensoryFeedback(.success, trigger: engine.state == .completed)
         .preferredColorScheme(.dark)
         .task(id: "\(engine.state)-\(showingMap)") {
@@ -183,10 +184,10 @@ struct GameView: View {
         VStack(spacing: 12) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("ЭКСПЕДИЦИЯ 01 · \(engine.depth) М")
+                    Text(engine.zone == .bossCave ? "БОНУСНЫЙ УРОВЕНЬ · ПЕЩЕРА" : "ЭКСПЕДИЦИЯ 01 · \(engine.depth) М")
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .tracking(1.2).foregroundStyle(OceanPalette.muted)
-                    Text(engine.hasBlackBox ? "Вернись на базу" : "Найди чёрный ящик")
+                    Text(engine.objectiveText)
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
                         .foregroundStyle(engine.hasBlackBox ? OceanPalette.teal : OceanPalette.white)
                         .lineLimit(1).minimumScaleFactor(0.8)
@@ -199,7 +200,10 @@ struct GameView: View {
                     : A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик"))
                 .accessibilitySortPriority(8)
                 Spacer(minLength: 0)
+                hudButton("ear", label: "Озвучить обстановку", id: "speakSurroundings", action: announcer.describeSurroundings)
+                if engine.zone == .ocean {
                 hudButton("map", label: A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"), id: "openMap", action: openMap)
+                }
                 hudButton("pause.fill", label: A11yL10n.text("a11y.pause", defaultValue: "Пауза"), id: "pauseDive", action: engine.pause)
             }
             HStack(spacing: 13) {
@@ -240,10 +244,12 @@ struct GameView: View {
             HStack(spacing: 6) {
                 Image(systemName: "location.north.fill")
                     .rotationEffect(.radians(atan2(engine.target.y - engine.position.y, engine.target.x - engine.position.x) + .pi / 2))
-                Text("\(engine.hasBlackBox ? "БАЗА" : "СИГНАЛ") · \(engine.targetDistance) М")
+                Text(engine.zone == .bossCave
+                     ? "СПРУТ · \(Int(ceil(engine.bossTimeRemaining))) С"
+                     : "\(engine.hasBlackBox ? "БАЗА" : "СИГНАЛ") · \(engine.targetDistance) М")
                     .tracking(1)
                 Spacer()
-                if engine.hasBlackBox { Label("ЯЩИК НА БОРТУ", systemImage: "checkmark").foregroundStyle(OceanPalette.teal) }
+                if engine.zone == .ocean, engine.hasBlackBox { Label("ЯЩИК НА БОРТУ", systemImage: "checkmark").foregroundStyle(OceanPalette.teal) }
             }
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
             .foregroundStyle(OceanPalette.gold.opacity(0.85)).allowsHitTesting(false)
@@ -294,6 +300,7 @@ struct GameView: View {
                     .padding(.horizontal, 15).padding(.vertical, 9)
                     .background(OceanPalette.ink.opacity(0.85), in: Capsule())
                     .padding(.horizontal, 16).allowsHitTesting(false)
+                    .accessibilityAddTraits(.updatesFrequently)
             }
             HStack(alignment: .center, spacing: 0) {
                 if voiceOverEnabled && voiceOverButtons {
@@ -401,6 +408,7 @@ struct GameView: View {
                     mapKey("battery.100percent", "Батарея", OceanPalette.teal)
                     mapKey("shield", "Щит", OceanPalette.blue)
                     mapKey("diamond", "Образец", OceanPalette.gold)
+                    if engine.portalRevealed { mapKey("circle.hexagongrid", "Портал", OceanPalette.portal) }
                 }
             }
             .accessibilityHidden(true)
@@ -709,7 +717,21 @@ private final class SteeringSurface: UIView {
         origin = nil
         knob = .zero
         onInput?(.zero)
+        accessibilityValue = "остановлена"
         setNeedsDisplay()
+    }
+
+    @objc private func steerUp() -> Bool { steer(CGVector(dx: 0, dy: -1), value: "курс вверх") }
+    @objc private func steerDown() -> Bool { steer(CGVector(dx: 0, dy: 1), value: "курс вниз") }
+    @objc private func steerLeft() -> Bool { steer(CGVector(dx: -1, dy: 0), value: "курс влево") }
+    @objc private func steerRight() -> Bool { steer(CGVector(dx: 1, dy: 0), value: "курс вправо") }
+    @objc private func stopSteering() -> Bool { releaseInput(); return true }
+
+    private func steer(_ vector: CGVector, value: String) -> Bool {
+        onInput?(vector)
+        accessibilityValue = value
+        UIAccessibility.post(notification: .announcement, argument: value)
+        return true
     }
 
     private func updateInput(_ point: CGPoint) {
@@ -806,6 +828,11 @@ private struct ExpeditionMap: View {
                 let color = pickup.kind == .battery ? OceanPalette.teal : (pickup.kind == .shield ? OceanPalette.blue : OceanPalette.gold)
                 let rect = CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)
                 context.fill(Path(roundedRect: rect, cornerRadius: pickup.kind == .battery ? 1 : 3), with: .color(color))
+            }
+            if let portal = engine.portal, engine.portalRevealed {
+                let p = point(portal.position)
+                context.stroke(Path(ellipseIn: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)),
+                               with: .color(OceanPalette.portal), lineWidth: 2)
             }
             let base = point(engine.level.base), wreck = point(engine.level.wreck), boat = point(engine.position)
             context.stroke(Path(ellipseIn: CGRect(x: base.x - 6, y: base.y - 6, width: 12, height: 12)), with: .color(OceanPalette.teal), lineWidth: 1.4)
