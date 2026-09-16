@@ -5,7 +5,7 @@ enum OceanPalette {
     static let teal = Color(red: 0.38, green: 0.89, blue: 0.80)
     static let gold = Color(red: 1, green: 0.77, blue: 0.33)
     static let muted = Color(red: 0.56, green: 0.72, blue: 0.75)
-    static let white = Color(red: 0.91, green: 0.96, blue: 0.93)
+    static let white = Color.white
     static let danger = Color(red: 1, green: 0.43, blue: 0.35)
     static let blue = Color(red: 0.4, green: 0.72, blue: 1)
     static let portal = Color(red: 0.75, green: 0.43, blue: 1)

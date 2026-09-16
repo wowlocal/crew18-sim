@@ -21,7 +21,7 @@ struct BossStrike {
 }
 
 enum AccessibilityContactKind: String, CaseIterable {
-    case target, base, mine, reef, battery, shield, sample, crystal
+    case target, base, mine, reef, battery, shield, sample, crystal, portal, boss, tentacle
 }
 
 struct AccessibilityContact: Identifiable, Equatable {
@@ -34,6 +34,16 @@ struct AccessibilityContact: Identifiable, Equatable {
 enum AccessibilityNavigation {
     static func distanceMeters(from origin: CGPoint, to destination: CGPoint) -> Int {
         Int(hypot(destination.x - origin.x, destination.y - origin.y) * 0.16)
+    }
+
+    static func nearestPoint(on rock: OceanRock, to position: CGPoint) -> CGPoint {
+        rock.vertices.indices.map { index in
+            let a = rock.vertices[index], b = rock.vertices[(index + 1) % rock.vertices.count]
+            let dx = b.x - a.x, dy = b.y - a.y
+            let t = min(1, max(0, ((position.x - a.x) * dx + (position.y - a.y) * dy)
+                / max(0.001, dx * dx + dy * dy)))
+            return CGPoint(x: a.x + t * dx, y: a.y + t * dy)
+        }.min { hypot($0.x - position.x, $0.y - position.y) < hypot($1.x - position.x, $1.y - position.y) } ?? position
     }
 
     /// Screen coordinates: twelve o'clock is up (negative Y), then clockwise.
@@ -64,6 +74,19 @@ enum A11yL10n {
         case .shield: text("a11y.contact.shield", defaultValue: "Щит")
         case .sample: text("a11y.contact.sample", defaultValue: "Образец")
         case .crystal: text("a11y.contact.crystal", defaultValue: "Кристалл")
+        case .portal: text("a11y.contact.portal", defaultValue: "Портал")
+        case .boss: text("a11y.contact.boss", defaultValue: "Спрут")
+        case .tentacle: text("a11y.contact.tentacle", defaultValue: "Удар щупальца")
+        }
+    }
+
+    static func pickupName(_ kind: PickupKind) -> String {
+        switch kind {
+        case .battery: contactKind(.battery)
+        case .shield: contactKind(.shield)
+        case .sample: contactKind(.sample)
+        case .crystal: contactKind(.crystal)
+        case .blackBox: text("a11y.blackbox", defaultValue: "Чёрный ящик")
         }
     }
 
@@ -242,7 +265,16 @@ struct OceanLevel {
 
 enum CompassCourse: Int, CaseIterable, Equatable {
     case n, ne, e, se, s, sw, w, nw
-    var label: String { ["север", "северо-восток", "восток", "юго-восток", "юг", "юго-запад", "запад", "северо-запад"][rawValue] }
+    var label: String {
+        [A11yL10n.text("a11y.course.north", defaultValue: "север"),
+         A11yL10n.text("a11y.course.northeast", defaultValue: "северо-восток"),
+         A11yL10n.text("a11y.course.east", defaultValue: "восток"),
+         A11yL10n.text("a11y.course.southeast", defaultValue: "юго-восток"),
+         A11yL10n.text("a11y.course.south", defaultValue: "юг"),
+         A11yL10n.text("a11y.course.southwest", defaultValue: "юго-запад"),
+         A11yL10n.text("a11y.course.west", defaultValue: "запад"),
+         A11yL10n.text("a11y.course.northwest", defaultValue: "северо-запад")][rawValue]
+    }
     var vector: CGVector { steeringVector(for: self) }
     init(vector: CGVector) {
         let angle = atan2(vector.dx, -vector.dy)
@@ -271,6 +303,7 @@ struct SituationSummary: Equatable {
     let find: Contact?
     let currentCourse: CompassCourse?
     let currentSpeed: Int
+    let caveTimeRemaining: Int?
 }
 
 enum GameEvent: Equatable {
@@ -298,7 +331,6 @@ final class GameEngine: NSObject, ObservableObject {
     @Published private(set) var damageCount = 0
     @Published private(set) var accessibilityAnnouncementRevision = 0
     @Published private(set) var eventCount = 0
-    @Published private(set) var announcementCount = 0
 
     @Published private var garage: GarageSave
     private static let garageKey = "podlodkaDive.garage.v1"
@@ -408,14 +440,20 @@ final class GameEngine: NSObject, ObservableObject {
                                  clockHour: AccessibilityNavigation.clockHour(from: position, to: point))
         }
 
+        if zone == .bossCave {
+            var contacts = [contact(id: "boss", kind: .boss, point: target)]
+            if let bossStrike, bossStrike.phase == .warning {
+                contacts.append(contact(id: "tentacle", kind: .tentacle, point: bossStrike.position))
+            }
+            return contacts
+        }
         var contacts = [contact(id: "target", kind: .target, point: target),
                         contact(id: "base", kind: .base, point: level.base)]
         contacts += mines.filter { mine in
             mine.phase != .spent && hypot(mine.position.x - position.x, mine.position.y - position.y) <= 400
         }.map { contact(id: "mine-\($0.id)", kind: .mine, point: $0.position) }
         contacts += level.rocks.compactMap { rock in
-            let nearest = CGPoint(x: min(max(position.x, rock.bounds.minX), rock.bounds.maxX),
-                                  y: min(max(position.y, rock.bounds.minY), rock.bounds.maxY))
+            let nearest = AccessibilityNavigation.nearestPoint(on: rock, to: position)
             guard hypot(nearest.x - position.x, nearest.y - position.y) <= 400 else { return nil }
             return contact(id: "reef-\(rock.id)", kind: .reef, point: nearest)
         }
@@ -431,6 +469,9 @@ final class GameEngine: NSObject, ObservableObject {
             }
             return contact(id: "pickup-\(pickup.id)", kind: kind, point: pickup.position)
         }
+        if let portal, portalRevealed {
+            contacts.append(contact(id: "portal", kind: .portal, point: portal.position))
+        }
         return contacts.sorted {
             if $0.distanceMeters == $1.distanceMeters { return $0.id < $1.id }
             return $0.distanceMeters < $1.distanceMeters
@@ -438,6 +479,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     var sectorOverview: String {
+        if zone == .bossCave { return accessibilityStatus + ". " + accessibilitySurroundings }
         let objective = hasBlackBox
             ? A11yL10n.text("a11y.objective.base", defaultValue: "Доставить чёрный ящик на базу")
             : A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик")
@@ -623,7 +665,7 @@ final class GameEngine: NSObject, ObservableObject {
         revealNearby(radius: 680)
         if let portal, hypot(position.x - portal.position.x, position.y - portal.position.y) < 680 {
             portalRevealed = true
-            announce("Сонар обнаружил портал в пещеру", duration: 3.5)
+            announce(A11yL10n.text("event.portal.revealed", defaultValue: "Сонар обнаружил портал в пещеру"), duration: 3.5)
         } else {
         announce(A11yL10n.text("event.sonar", defaultValue: "Сонар: находки отмечены на карте"), duration: 2.5)
         }
@@ -633,9 +675,11 @@ final class GameEngine: NSObject, ObservableObject {
     func activateLightBoost() {
         guard canLightBoost else { return }
         energy -= Self.lightBoostCost
+        checkEnergyWarning()
         lightBoostRemaining = Self.lightBoostDuration
         lightBoostCooldown = Self.lightBoostRecharge
-        announce("Фары усилены на 4 секунды", duration: 2.5)
+        announce(A11yL10n.text("event.light.boost", defaultValue: "Фары усилены на 4 секунды"), duration: 2.5)
+        if energy <= 0 { finish(success: false, reason: .energy) }
         objectWillChange.send()
     }
 
@@ -645,26 +689,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     var surroundingsDescription: String {
-        var parts = ["Обстановка: цель \(directionDescription(to: target)), \(targetDistance) метров."]
-        let scanRange = max(headlightRange, sonarRemaining > 0 ? 680 : 0)
-        if let mine = mines
-            .filter({ $0.phase != .spent && hypot($0.position.x - position.x, $0.position.y - position.y) <= scanRange })
-            .min(by: { distance(to: $0.position) < distance(to: $1.position) }) {
-            parts.append("Мина \(directionDescription(to: mine.position)), \(Int(distance(to: mine.position) * 0.16)) метров.")
-        }
-        if let pickup = pickups
-            .filter({ !$0.collected && hypot($0.position.x - position.x, $0.position.y - position.y) <= scanRange })
-            .min(by: { distance(to: $0.position) < distance(to: $1.position) }) {
-            let names: [PickupKind: String] = [.battery: "батарея", .shield: "щит", .sample: "образец", .blackBox: "чёрный ящик", .crystal: "кристалл"]
-            parts.append("\(names[pickup.kind] ?? "Находка") \(directionDescription(to: pickup.position)), \(Int(distance(to: pickup.position) * 0.16)) метров.")
-        }
-        let flow = current(at: position)
-        if hypot(flow.dx, flow.dy) > 5 {
-            let flowPoint = CGPoint(x: position.x + flow.dx, y: position.y + flow.dy)
-            parts.append("Течение несёт \(directionDescription(to: flowPoint)).")
-        }
-        if parts.count == 1 { parts.append("В освещённой зоне препятствий и находок не обнаружено.") }
-        return parts.joined(separator: " ")
+        sectorOverview
     }
 
     func pause() {
@@ -807,29 +832,31 @@ final class GameEngine: NSObject, ObservableObject {
             let delta = CGVector(dx: point.x - position.x, dy: point.y - position.y)
             return .init(id: id, name: name, distance: Int(hypot(delta.dx, delta.dy) * 0.16), course: CompassCourse(vector: delta))
         }
-        var dangers = mines.filter { $0.phase != .spent }.map { contact("mine:\($0.id)", "Мина", $0.position) }
-        // Closest point on each reef edge, rather than its centre, describes the obstacle ahead.
+        if zone == .bossCave {
+            let strike = bossStrike.flatMap { strike in
+                strike.phase == .warning ? contact("tentacle", A11yL10n.contactKind(.tentacle), strike.position) : nil
+            }
+            return SituationSummary(depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
+                targetDistance: targetDistance, targetCourse: CompassCourse.n,
+                danger: strike, find: nil, currentCourse: nil, currentSpeed: 0,
+                caveTimeRemaining: Int(ceil(bossTimeRemaining)))
+        }
+        var dangers = mines.filter { $0.phase != .spent }.map {
+            contact("mine:\($0.id)", A11yL10n.contactKind(.mine), $0.position)
+        }
         for rock in level.rocks {
-            var points: [CGPoint] = []
-            for i in rock.vertices.indices {
-                let a = rock.vertices[i], b = rock.vertices[(i + 1) % rock.vertices.count]
-                let dx = b.x - a.x, dy = b.y - a.y
-                let t = min(1, max(0, ((position.x - a.x) * dx + (position.y - a.y) * dy) / max(0.001, dx * dx + dy * dy)))
-                points.append(CGPoint(x: a.x + t * dx, y: a.y + t * dy))
-            }
-            if let point = points.min(by: { hypot($0.x - position.x, $0.y - position.y) < hypot($1.x - position.x, $1.y - position.y) }) {
-                dangers.append(contact("rock:\(rock.id)", "Риф", point))
-            }
+            dangers.append(contact("rock:\(rock.id)", A11yL10n.contactKind(.reef),
+                                   AccessibilityNavigation.nearestPoint(on: rock, to: position)))
         }
         let finds = pickups.filter { !$0.collected && revealedPickups.contains($0.id) }.map {
-            contact("pickup:\($0.id)", [PickupKind.battery: "Батарея", .shield: "Щит", .sample: "Образец", .blackBox: "Чёрный ящик", .crystal: "Кристалл"][$0.kind]!, $0.position)
+            contact("pickup:\($0.id)", A11yL10n.pickupName($0.kind), $0.position)
         }
         let flow = current(at: position)
         return SituationSummary(depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
             targetDistance: targetDistance, targetCourse: CompassCourse(vector: CGVector(dx: target.x - position.x, dy: target.y - position.y)),
             danger: dangers.min { $0.distance < $1.distance }, find: finds.min { $0.distance < $1.distance },
             currentCourse: hypot(flow.dx, flow.dy) > 0.1 ? CompassCourse(vector: flow) : nil,
-            currentSpeed: Int(hypot(flow.dx, flow.dy) * 0.16))
+            currentSpeed: Int(hypot(flow.dx, flow.dy) * 0.16), caveTimeRemaining: nil)
     }
 
     private func resolveRocks() {
@@ -910,6 +937,7 @@ final class GameEngine: NSObject, ObservableObject {
         portalReturnPosition = position
         self.portal = nil
         zone = .bossCave
+        accessibilityMoveRemaining = 0
         position = CGPoint(x: Self.caveSize.width / 2, y: Self.caveSize.height - 155)
         velocity = .zero
         steering = .zero
@@ -918,7 +946,7 @@ final class GameEngine: NSObject, ObservableObject {
         bossStrikeCooldown = 1.6
         bossStrike = nil
         eventCount += 1
-        announce("Портал! Пещера босса. Продержись 24 секунды под атаками гигантского спрута.", duration: 7)
+        announce(A11yL10n.text("event.portal.enter", defaultValue: "Портал! Пещера босса. Продержись 24 секунды под атаками гигантского спрута."), duration: 7, urgent: true)
         updateCamera(dt: 1, snap: true)
     }
 
@@ -941,7 +969,7 @@ final class GameEngine: NSObject, ObservableObject {
                         velocity.dy += position.y < strike.position.y ? -95 : 95
                         boostRemaining = 0
                     } else {
-                        announce("Щупальце промахнулось", duration: 1.2)
+                        announce(A11yL10n.text("event.tentacle.missed", defaultValue: "Щупальце промахнулось"), duration: 1.2)
                     }
                 case .impact:
                     bossStrike = nil
@@ -955,7 +983,7 @@ final class GameEngine: NSObject, ObservableObject {
                 bossStrike = BossStrike(position: position, timer: 1.45)
                 bossStrikeCooldown = 2.1
                 eventCount += 1
-                announce("Удар щупальца! Покинь отмеченную область.", duration: 1.4)
+                announce(A11yL10n.text("event.tentacle.warning", defaultValue: "Удар щупальца! Уходи в сторону или используй форсаж."), duration: 1.4, urgent: true)
             }
         }
     }
@@ -966,11 +994,12 @@ final class GameEngine: NSObject, ObservableObject {
         bossStrike = nil
         zone = .ocean
         position = portalReturnPosition
+        accessibilityMoveRemaining = 0
         velocity = .zero
         steering = .zero
         invulnerability = 1
         eventCount += 1
-        announce("Спрут отступил! Артефакт пещеры добавил 300 к добыче.", duration: 6)
+        announce(A11yL10n.text("event.boss.complete", defaultValue: "Спрут отступил! Артефакт пещеры добавил 300 к добыче."), duration: 6)
         updateCamera(dt: 1, snap: true)
     }
 
@@ -1001,7 +1030,7 @@ final class GameEngine: NSObject, ObservableObject {
             case .crystal:
                 garage.crystals += 10
                 saveGarage()
-                announce("Кристаллы · +10. Баланс: \(crystals)")
+                announce(A11yL10n.format("event.crystals", defaultValue: "Кристаллы. Плюс 10. Баланс: %lld", Int64(crystals)))
             case .battery:
                 energy = min(100, energy + 30)
                 announce(A11yL10n.text("event.battery", defaultValue: "Батарея. Плюс 30 энергии"))
@@ -1055,21 +1084,20 @@ final class GameEngine: NSObject, ObservableObject {
     private func announceThresholdsAndDocking() {
         if hull == 1, !announcedCriticalHull {
             announcedCriticalHull = true
-            announce(A11yL10n.text("event.hull.critical", defaultValue: "Внимание. Корпус: 1 из 3."), guaranteed: true)
+            announce(A11yL10n.text("event.hull.critical", defaultValue: "Внимание. Корпус: 1 из 3."), urgent: true)
         }
         let distanceToBase = hypot(position.x - level.base.x, position.y - level.base.y)
-        if hasBlackBox, distanceToBase < 180, !announcedDockingHint {
+        if zone == .ocean, state == .playing, hasBlackBox, distanceToBase < 180, !announcedDockingHint {
             announcedDockingHint = true
             announce(A11yL10n.text("event.docking", defaultValue: "База рядом. Остановись в круге базы для швартовки."))
         }
     }
 
-    private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false, guaranteed: Bool = false) {
+    private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
         accessibilityAnnouncementRevision += 1
-        announcementCount += 1
     }
 
     private func directionAndDistance(to point: CGPoint) -> String {
@@ -1105,13 +1133,11 @@ final class GameEngine: NSObject, ObservableObject {
                 bestScore = score
                 defaults.set(score, forKey: Self.bestKey)
             }
-            announce("Груз доставлен. Экспедиция завершена.")
             state = .completed
         } else {
-            if reason == .energy { events.send(.speak("Энергия закончилась")) }
+            if reason == .energy { events.send(.danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась"))) }
             failureReason = reason
             score = 0
-            announce(reason == .energy ? "Заряд закончился. Экспедиция завершена." : "Корпус разрушен. Экспедиция завершена.")
             state = .gameOver
         }
     }

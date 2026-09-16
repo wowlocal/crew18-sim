@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
 		A10000000000000000000001 /* PodlodkaDiveApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* PodlodkaDiveApp.swift */; };
 		A10000000000000000000002 /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* GameView.swift */; };
 		A10000000000000000000003 /* GameEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* GameEngine.swift */; };
@@ -37,6 +38,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D20000000000000000000001 /* VoiceOverAnnouncer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceOverAnnouncer.swift; sourceTree = "<group>"; };
 		A20000000000000000000001 /* PodlodkaDiveApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodlodkaDiveApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* GameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameView.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* GameEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameEngine.swift; sourceTree = "<group>"; };
@@ -94,6 +96,7 @@
 			children = (
 				A20000000000000000000001 /* PodlodkaDiveApp.swift */,
 				A20000000000000000000002 /* GameView.swift */,
+				D20000000000000000000001 /* VoiceOverAnnouncer.swift */,
 				A20000000000000000000003 /* GameEngine.swift */,
 				A20000000000000000000004 /* GameCanvas.swift */,
 				A20000000000000000000005 /* Assets.xcassets */,
@@ -269,6 +272,7 @@
 			files = (
 				A10000000000000000000001 /* PodlodkaDiveApp.swift in Sources */,
 				A10000000000000000000002 /* GameView.swift in Sources */,
+				D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */,
 				A10000000000000000000003 /* GameEngine.swift in Sources */,
 				A10000000000000000000004 /* GameCanvas.swift in Sources */,
 			);

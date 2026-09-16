@@ -1,91 +1,1766 @@
 {
-  "sourceLanguage" : "ru",
-  "strings" : {
-    "a11y.best.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Best delivered salvage: %lld"}},"ru":{"stringUnit":{"state":"translated","value":"Лучшая доставленная добыча: %lld"}}}},
-    "a11y.best.label" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Best salvage"}},"ru":{"stringUnit":{"state":"translated","value":"Лучшая добыча"}}}},
-    "a11y.boost" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Boost"}},"ru":{"stringUnit":{"state":"translated","value":"Форсаж"}}}},
-    "a11y.boost.hint" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Accelerates along the selected course and uses 7 energy."}},"ru":{"stringUnit":{"state":"translated","value":"Даёт рывок по выбранному курсу и расходует 7 энергии."}}}},
-    "a11y.cargo.label" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Cargo aboard"}},"ru":{"stringUnit":{"state":"translated","value":"Груз на борту"}}}},
-    "a11y.contact.base" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Base"}},"ru":{"stringUnit":{"state":"translated","value":"База"}}}},
-    "a11y.contact.battery" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Battery"}},"ru":{"stringUnit":{"state":"translated","value":"Батарея"}}}},
-    "a11y.contact.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"%@, %lld meters, at %lld o'clock"}},"ru":{"stringUnit":{"state":"translated","value":"%@, %lld метров, на %lld часов"}}}},
-    "a11y.contact.mine" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Mine"}},"ru":{"stringUnit":{"state":"translated","value":"Мина"}}}},
-    "a11y.contact.reef" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Reef"}},"ru":{"stringUnit":{"state":"translated","value":"Риф"}}}},
-    "a11y.contact.sample" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Sample"}},"ru":{"stringUnit":{"state":"translated","value":"Образец"}}}},
-    "a11y.contact.shield" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Shield"}},"ru":{"stringUnit":{"state":"translated","value":"Щит"}}}},
-    "a11y.contact.target" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Target"}},"ru":{"stringUnit":{"state":"translated","value":"Цель"}}}},
-    "a11y.cooldown.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Cooldown: %lld seconds"}},"ru":{"stringUnit":{"state":"translated","value":"Перезарядка: %lld секунд"}}}},
-    "a11y.course.east" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"east"}},"ru":{"stringUnit":{"state":"translated","value":"восток"}}}},
-    "a11y.course.north" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"north"}},"ru":{"stringUnit":{"state":"translated","value":"север"}}}},
-    "a11y.course.northeast" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"northeast"}},"ru":{"stringUnit":{"state":"translated","value":"северо-восток"}}}},
-    "a11y.course.northwest" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"northwest"}},"ru":{"stringUnit":{"state":"translated","value":"северо-запад"}}}},
-    "a11y.course.south" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"south"}},"ru":{"stringUnit":{"state":"translated","value":"юг"}}}},
-    "a11y.course.southeast" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"southeast"}},"ru":{"stringUnit":{"state":"translated","value":"юго-восток"}}}},
-    "a11y.course.southwest" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"southwest"}},"ru":{"stringUnit":{"state":"translated","value":"юго-запад"}}}},
-    "a11y.course.stop" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"stopped"}},"ru":{"stringUnit":{"state":"translated","value":"стоп"}}}},
-    "a11y.course.west" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"west"}},"ru":{"stringUnit":{"state":"translated","value":"запад"}}}},
-    "a11y.direction.east" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"East"}},"ru":{"stringUnit":{"state":"translated","value":"Восток"}}}},
-    "a11y.direction.north" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"North"}},"ru":{"stringUnit":{"state":"translated","value":"Север"}}}},
-    "a11y.direction.northeast" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Northeast"}},"ru":{"stringUnit":{"state":"translated","value":"Северо-восток"}}}},
-    "a11y.direction.northwest" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Northwest"}},"ru":{"stringUnit":{"state":"translated","value":"Северо-запад"}}}},
-    "a11y.direction.south" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"South"}},"ru":{"stringUnit":{"state":"translated","value":"Юг"}}}},
-    "a11y.direction.southeast" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Southeast"}},"ru":{"stringUnit":{"state":"translated","value":"Юго-восток"}}}},
-    "a11y.direction.southwest" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Southwest"}},"ru":{"stringUnit":{"state":"translated","value":"Юго-запад"}}}},
-    "a11y.direction.stop" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Stop and hover"}},"ru":{"stringUnit":{"state":"translated","value":"Стоп, зависнуть"}}}},
-    "a11y.direction.west" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"West"}},"ru":{"stringUnit":{"state":"translated","value":"Запад"}}}},
-    "a11y.delivered" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Delivered"}},"ru":{"stringUnit":{"state":"translated","value":"Доставлено"}}}},
-    "a11y.energy.label" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Energy"}},"ru":{"stringUnit":{"state":"translated","value":"Энергия"}}}},
-    "a11y.hull.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"%lld of 3"}},"ru":{"stringUnit":{"state":"translated","value":"%lld из 3"}}}},
-    "a11y.hull.label" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Hull"}},"ru":{"stringUnit":{"state":"translated","value":"Корпус"}}}},
-    "a11y.hull.shield.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"%lld of 3. Shield active"}},"ru":{"stringUnit":{"state":"translated","value":"%lld из 3. Щит активен"}}}},
-    "a11y.map.close.hint" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Closes the map and resumes the expedition."}},"ru":{"stringUnit":{"state":"translated","value":"Закрывает карту и продолжает экспедицию."}}}},
-    "a11y.map.close" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Return to the ocean"}},"ru":{"stringUnit":{"state":"translated","value":"Вернуться в океан"}}}},
-    "a11y.map.open" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Expedition map"}},"ru":{"stringUnit":{"state":"translated","value":"Карта экспедиции"}}}},
-    "a11y.map.overview.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Sector overview. Objective: %@. Nearest contacts: %@. Remaining finds: %lld."}},"ru":{"stringUnit":{"state":"translated","value":"Обзор сектора. Цель: %@. Ближайшие контакты: %@. Осталось находок: %lld."}}}},
-    "a11y.objective.base" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Deliver the black box to base"}},"ru":{"stringUnit":{"state":"translated","value":"Доставить чёрный ящик на базу"}}}},
-    "a11y.objective.blackbox" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Find the black box"}},"ru":{"stringUnit":{"state":"translated","value":"Найти чёрный ящик"}}}},
-    "a11y.objective.label" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Expedition objective"}},"ru":{"stringUnit":{"state":"translated","value":"Цель экспедиции"}}}},
-    "a11y.pause" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Pause"}},"ru":{"stringUnit":{"state":"translated","value":"Пауза"}}}},
-    "a11y.percent.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"%lld percent"}},"ru":{"stringUnit":{"state":"translated","value":"%lld процентов"}}}},
-    "a11y.ready" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Ready"}},"ru":{"stringUnit":{"state":"translated","value":"Готов"}}}},
-    "a11y.resume" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Resume"}},"ru":{"stringUnit":{"state":"translated","value":"Продолжить"}}}},
-    "a11y.retry" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"New expedition"}},"ru":{"stringUnit":{"state":"translated","value":"Новая экспедиция"}}}},
-    "a11y.return.menu" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Return to surface"}},"ru":{"stringUnit":{"state":"translated","value":"На поверхность"}}}},
-    "a11y.result.energy.detail" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Energy depleted. Cargo remains in the depths."}},"ru":{"stringUnit":{"state":"translated","value":"Заряд закончился. Груз остался на глубине."}}}},
-    "a11y.result.failure" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Expedition complete"}},"ru":{"stringUnit":{"state":"translated","value":"Экспедиция завершена"}}}},
-    "a11y.result.hull.detail" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"The hull failed. Cargo remains in the depths."}},"ru":{"stringUnit":{"state":"translated","value":"Корпус не выдержал. Груз остался на глубине."}}}},
-    "a11y.result.paused" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Expedition paused"}},"ru":{"stringUnit":{"state":"translated","value":"Экспедиция на паузе"}}}},
-    "a11y.result.paused.detail" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Energy is preserved."}},"ru":{"stringUnit":{"state":"translated","value":"Заряд сохраняется."}}}},
-    "a11y.result.success" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Cargo delivered"}},"ru":{"stringUnit":{"state":"translated","value":"Груз доставлен"}}}},
-    "a11y.result.success.detail" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"The black box is at base."}},"ru":{"stringUnit":{"state":"translated","value":"Чёрный ящик на базе."}}}},
-    "a11y.rotor.contacts" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Sonar contacts"}},"ru":{"stringUnit":{"state":"translated","value":"Контакты сонара"}}}},
-    "a11y.sonar" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Sonar"}},"ru":{"stringUnit":{"state":"translated","value":"Сонар"}}}},
-    "a11y.sonar.hint" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Detects nearby finds and adds them to sonar contacts."}},"ru":{"stringUnit":{"state":"translated","value":"Обнаруживает находки поблизости и добавляет их в контакты."}}}},
-    "a11y.steering.hint" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Choose one of eight directions or stop in VoiceOver actions."}},"ru":{"stringUnit":{"state":"translated","value":"Выберите одно из восьми направлений в действиях VoiceOver или остановку."}}}},
-    "a11y.steering.label" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Submarine steering"}},"ru":{"stringUnit":{"state":"translated","value":"Руль подлодки"}}}},
-    "a11y.steering.value.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Course: %@, thrust %lld percent"}},"ru":{"stringUnit":{"state":"translated","value":"Курс: %@, тяга %lld процентов"}}}},
-    "a11y.target.course" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Course to target"}},"ru":{"stringUnit":{"state":"translated","value":"Курс на цель"}}}},
-    "a11y.target.value.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Signal: %lld meters, at %lld o'clock"}},"ru":{"stringUnit":{"state":"translated","value":"Сигнал: %lld метров, на %lld часов"}}}},
-    "a11y.start" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Start expedition"}},"ru":{"stringUnit":{"state":"translated","value":"Начать экспедицию"}}}},
-    "a11y.start.hint" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Starts the expedition and opens the controls."}},"ru":{"stringUnit":{"state":"translated","value":"Запускает экспедицию и открывает приборы управления."}}}},
-    "a11y.welcome.controls" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Controls: free steering, sonar, and boost."}},"ru":{"stringUnit":{"state":"translated","value":"Управление: свободный курс, сонар и форсаж."}}}},
-    "a11y.welcome.controls.hint" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"During the expedition, choose a course with the VoiceOver actions on the steering control."}},"ru":{"stringUnit":{"state":"translated","value":"В экспедиции выбирай курс действиями VoiceOver на руле."}}}},
-    "a11y.welcome.objective" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Find the black box and return with the salvage."}},"ru":{"stringUnit":{"state":"translated","value":"Найди чёрный ящик и вернись с добычей."}}}},
-    "a11y.welcome.title" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Podlodka Dive. Course for the depths."}},"ru":{"stringUnit":{"state":"translated","value":"Podlodka Dive. Курс на глубину."}}}},
-    "event.battery" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Battery. Plus 30 energy"}},"ru":{"stringUnit":{"state":"translated","value":"Батарея. Плюс 30 энергии"}}}},
-    "event.blackbox" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Black box found. Return to base!"}},"ru":{"stringUnit":{"state":"translated","value":"Чёрный ящик найден. Вернись на базу!"}}}},
-    "event.docking" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Base nearby. Stop inside the base circle to dock."}},"ru":{"stringUnit":{"state":"translated","value":"База рядом. Остановись в круге базы для швартовки."}}}},
-    "event.energy.low" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Warning. Energy below 25 percent."}},"ru":{"stringUnit":{"state":"translated","value":"Внимание. Энергия ниже 25 процентов."}}}},
-    "event.hull.critical" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Warning. Hull: 1 of 3."}},"ru":{"stringUnit":{"state":"translated","value":"Внимание. Корпус: 1 из 3."}}}},
-    "event.hull.damage.format" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Hull damaged. %lld of 3"}},"ru":{"stringUnit":{"state":"translated","value":"Корпус повреждён. %lld из 3"}}}},
-    "event.mine" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Mine activated — move away!"}},"ru":{"stringUnit":{"state":"translated","value":"Мина активирована — отойди!"}}}},
-    "event.sample" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Sample aboard. Plus 75 salvage"}},"ru":{"stringUnit":{"state":"translated","value":"Образец на борту. Плюс 75 к добыче"}}}},
-    "event.shield" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Shield. Protection from one hit"}},"ru":{"stringUnit":{"state":"translated","value":"Щит. Защита от одного удара"}}}},
-    "event.shield.hit" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Shield absorbed the impact"}},"ru":{"stringUnit":{"state":"translated","value":"Щит поглотил удар"}}}},
-    "event.sonar" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Sonar: finds marked on the map"}},"ru":{"stringUnit":{"state":"translated","value":"Сонар: находки отмечены на карте"}}}},
-    "event.start" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Find the black box. Save energy for the return trip."}},"ru":{"stringUnit":{"state":"translated","value":"Найди чёрный ящик. Сохрани заряд на возвращение."}}}},
-    "night.hint" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Darkens the ocean and switches off the headlight. Controls do not change."}},"ru":{"stringUnit":{"state":"translated","value":"Затемняет океан и выключает фонарь. Управление не меняется."}}}},
-    "night.toggle" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Night expedition"}},"ru":{"stringUnit":{"state":"translated","value":"Ночная экспедиция"}}}}
+  "sourceLanguage": "ru",
+  "strings": {
+    "a11y.best.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Best delivered salvage: %lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лучшая доставленная добыча: %lld"
+          }
+        }
+      }
+    },
+    "a11y.best.label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Best salvage"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лучшая добыча"
+          }
+        }
+      }
+    },
+    "a11y.boost": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boost"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Форсаж"
+          }
+        }
+      }
+    },
+    "a11y.boost.hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accelerates along the selected course and uses 7 energy."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Даёт рывок по выбранному курсу и расходует 7 энергии."
+          }
+        }
+      }
+    },
+    "a11y.cargo.label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cargo aboard"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Груз на борту"
+          }
+        }
+      }
+    },
+    "a11y.contact.base": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Base"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "База"
+          }
+        }
+      }
+    },
+    "a11y.contact.battery": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Battery"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Батарея"
+          }
+        }
+      }
+    },
+    "a11y.contact.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, %lld meters, at %lld o'clock"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, %lld метров, на %lld часов"
+          }
+        }
+      }
+    },
+    "a11y.contact.mine": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mine"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мина"
+          }
+        }
+      }
+    },
+    "a11y.contact.reef": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reef"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Риф"
+          }
+        }
+      }
+    },
+    "a11y.contact.sample": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sample"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Образец"
+          }
+        }
+      }
+    },
+    "a11y.contact.shield": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shield"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Щит"
+          }
+        }
+      }
+    },
+    "a11y.contact.target": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Target"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цель"
+          }
+        }
+      }
+    },
+    "a11y.cooldown.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cooldown: %lld seconds"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезарядка: %lld секунд"
+          }
+        }
+      }
+    },
+    "a11y.course.east": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "восток"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "east"
+          }
+        }
+      }
+    },
+    "a11y.course.north": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "север"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "north"
+          }
+        }
+      }
+    },
+    "a11y.course.northeast": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "северо-восток"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "northeast"
+          }
+        }
+      }
+    },
+    "a11y.course.northwest": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "северо-запад"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "northwest"
+          }
+        }
+      }
+    },
+    "a11y.course.south": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "юг"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "south"
+          }
+        }
+      }
+    },
+    "a11y.course.southeast": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "юго-восток"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "southeast"
+          }
+        }
+      }
+    },
+    "a11y.course.southwest": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "юго-запад"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "southwest"
+          }
+        }
+      }
+    },
+    "a11y.course.stop": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "stopped"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "стоп"
+          }
+        }
+      }
+    },
+    "a11y.course.west": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "запад"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "west"
+          }
+        }
+      }
+    },
+    "a11y.direction.east": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "East"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Восток"
+          }
+        }
+      }
+    },
+    "a11y.direction.north": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "North"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Север"
+          }
+        }
+      }
+    },
+    "a11y.direction.northeast": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Northeast"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Северо-восток"
+          }
+        }
+      }
+    },
+    "a11y.direction.northwest": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Northwest"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Северо-запад"
+          }
+        }
+      }
+    },
+    "a11y.direction.south": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "South"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Юг"
+          }
+        }
+      }
+    },
+    "a11y.direction.southeast": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Southeast"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Юго-восток"
+          }
+        }
+      }
+    },
+    "a11y.direction.southwest": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Southwest"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Юго-запад"
+          }
+        }
+      }
+    },
+    "a11y.direction.stop": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop and hover"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стоп, зависнуть"
+          }
+        }
+      }
+    },
+    "a11y.direction.west": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "West"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запад"
+          }
+        }
+      }
+    },
+    "a11y.delivered": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivered"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доставлено"
+          }
+        }
+      }
+    },
+    "a11y.energy.label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Energy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Энергия"
+          }
+        }
+      }
+    },
+    "a11y.hull.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld of 3"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld из 3"
+          }
+        }
+      }
+    },
+    "a11y.hull.label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hull"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Корпус"
+          }
+        }
+      }
+    },
+    "a11y.hull.shield.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld of 3. Shield active"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld из 3. Щит активен"
+          }
+        }
+      }
+    },
+    "a11y.map.close.hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Closes the map and resumes the expedition."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Закрывает карту и продолжает экспедицию."
+          }
+        }
+      }
+    },
+    "a11y.map.close": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Return to the ocean"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вернуться в океан"
+          }
+        }
+      }
+    },
+    "a11y.map.open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expedition map"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Карта экспедиции"
+          }
+        }
+      }
+    },
+    "a11y.map.overview.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sector overview. Objective: %@. Nearest contacts: %@. Remaining finds: %lld."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обзор сектора. Цель: %@. Ближайшие контакты: %@. Осталось находок: %lld."
+          }
+        }
+      }
+    },
+    "a11y.objective.base": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deliver the black box to base"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доставить чёрный ящик на базу"
+          }
+        }
+      }
+    },
+    "a11y.objective.blackbox": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find the black box"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Найти чёрный ящик"
+          }
+        }
+      }
+    },
+    "a11y.objective.label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expedition objective"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цель экспедиции"
+          }
+        }
+      }
+    },
+    "a11y.pause": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пауза"
+          }
+        }
+      }
+    },
+    "a11y.percent.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld percent"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld процентов"
+          }
+        }
+      }
+    },
+    "a11y.ready": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готов"
+          }
+        }
+      }
+    },
+    "a11y.resume": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Продолжить"
+          }
+        }
+      }
+    },
+    "a11y.retry": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New expedition"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новая экспедиция"
+          }
+        }
+      }
+    },
+    "a11y.return.menu": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Return to surface"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На поверхность"
+          }
+        }
+      }
+    },
+    "a11y.result.energy.detail": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Energy depleted. Cargo remains in the depths."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заряд закончился. Груз остался на глубине."
+          }
+        }
+      }
+    },
+    "a11y.result.failure": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expedition complete"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспедиция завершена"
+          }
+        }
+      }
+    },
+    "a11y.result.hull.detail": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hull failed. Cargo remains in the depths."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Корпус не выдержал. Груз остался на глубине."
+          }
+        }
+      }
+    },
+    "a11y.result.paused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expedition paused"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспедиция на паузе"
+          }
+        }
+      }
+    },
+    "a11y.result.paused.detail": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Energy is preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заряд сохраняется."
+          }
+        }
+      }
+    },
+    "a11y.result.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cargo delivered"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Груз доставлен"
+          }
+        }
+      }
+    },
+    "a11y.result.success.detail": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The black box is at base."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чёрный ящик на базе."
+          }
+        }
+      }
+    },
+    "a11y.rotor.contacts": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonar contacts"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Контакты сонара"
+          }
+        }
+      }
+    },
+    "a11y.sonar": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonar"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сонар"
+          }
+        }
+      }
+    },
+    "a11y.sonar.hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detects nearby finds and adds them to sonar contacts."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обнаруживает находки поблизости и добавляет их в контакты."
+          }
+        }
+      }
+    },
+    "a11y.steering.hint": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Смахните вверх или вниз для выбора курса, затем выполните действие Плыть. Смена выбранного курса не меняет тягу до команды Плыть. Стоп выключает тягу, но течение может сносить лодку."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swipe up or down to select a course, then use Sail. Selection does not change thrust until Sail. Stop turns thrust off; currents can still cause drift."
+          }
+        }
+      }
+    },
+    "a11y.steering.label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Submarine steering"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Руль подлодки"
+          }
+        }
+      }
+    },
+    "a11y.steering.value.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Course: %@, thrust %lld percent"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Курс: %@, тяга %lld процентов"
+          }
+        }
+      }
+    },
+    "a11y.target.course": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Course to target"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Курс на цель"
+          }
+        }
+      }
+    },
+    "a11y.target.value.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signal: %lld meters, at %lld o'clock"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сигнал: %lld метров, на %lld часов"
+          }
+        }
+      }
+    },
+    "a11y.start": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start expedition"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начать экспедицию"
+          }
+        }
+      }
+    },
+    "a11y.start.hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starts the expedition and opens the controls."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запускает экспедицию и открывает приборы управления."
+          }
+        }
+      }
+    },
+    "a11y.welcome.controls": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Controls: free steering, sonar, and boost."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Управление: свободный курс, сонар и форсаж."
+          }
+        }
+      }
+    },
+    "a11y.welcome.controls.hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "During the expedition, choose a course with the VoiceOver actions on the steering control."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В экспедиции выбирай курс действиями VoiceOver на руле."
+          }
+        }
+      }
+    },
+    "a11y.welcome.objective": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find the black box and return with the salvage."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Найди чёрный ящик и вернись с добычей."
+          }
+        }
+      }
+    },
+    "a11y.welcome.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Podlodka Dive. Course for the depths."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Podlodka Dive. Курс на глубину."
+          }
+        }
+      }
+    },
+    "event.battery": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Battery. Plus 30 energy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Батарея. Плюс 30 энергии"
+          }
+        }
+      }
+    },
+    "event.blackbox": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Black box found. Return to base!"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чёрный ящик найден. Вернись на базу!"
+          }
+        }
+      }
+    },
+    "event.docking": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Base nearby. Stop inside the base circle to dock."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "База рядом. Остановись в круге базы для швартовки."
+          }
+        }
+      }
+    },
+    "event.energy.low": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning. Energy below 25 percent."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Внимание. Энергия ниже 25 процентов."
+          }
+        }
+      }
+    },
+    "event.hull.critical": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning. Hull: 1 of 3."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Внимание. Корпус: 1 из 3."
+          }
+        }
+      }
+    },
+    "event.hull.damage.format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hull damaged. %lld of 3"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Корпус повреждён. %lld из 3"
+          }
+        }
+      }
+    },
+    "event.mine": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mine activated — move away!"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мина активирована — отойди!"
+          }
+        }
+      }
+    },
+    "event.sample": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sample aboard. Plus 75 salvage"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Образец на борту. Плюс 75 к добыче"
+          }
+        }
+      }
+    },
+    "event.shield": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shield. Protection from one hit"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Щит. Защита от одного удара"
+          }
+        }
+      }
+    },
+    "event.shield.hit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shield absorbed the impact"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Щит поглотил удар"
+          }
+        }
+      }
+    },
+    "event.sonar": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonar: finds marked on the map"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сонар: находки отмечены на карте"
+          }
+        }
+      }
+    },
+    "event.start": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find the black box. Save energy for the return trip."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Найди чёрный ящик. Сохрани заряд на возвращение."
+          }
+        }
+      }
+    },
+    "night.hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Darkens the ocean and switches off the headlight. Controls do not change."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Затемняет океан и выключает фонарь. Управление не меняется."
+          }
+        }
+      }
+    },
+    "night.toggle": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Night expedition"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ночная экспедиция"
+          }
+        }
+      }
+    },
+    "event.energy.empty": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Энергия закончилась"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Energy depleted"
+          }
+        }
+      }
+    },
+    "event.light.boost": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фары усилены на 4 секунды"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Headlights boosted for 4 seconds"
+          }
+        }
+      }
+    },
+    "a11y.contact.crystal": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кристалл"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crystal"
+          }
+        }
+      }
+    },
+    "a11y.contact.portal": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Портал"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Portal"
+          }
+        }
+      }
+    },
+    "a11y.contact.boss": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Спрут"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Octopus"
+          }
+        }
+      }
+    },
+    "a11y.contact.tentacle": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удар щупальца"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tentacle strike"
+          }
+        }
+      }
+    },
+    "a11y.blackbox": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чёрный ящик"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Black box"
+          }
+        }
+      }
+    },
+    "event.tentacle.warning": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удар щупальца! Уходи в сторону или используй форсаж."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tentacle strike! Move away or boost."
+          }
+        }
+      }
+    },
+    "event.portal.revealed": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сонар обнаружил портал в пещеру"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonar detected a cave portal"
+          }
+        }
+      }
+    },
+    "event.portal.enter": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Портал! Пещера босса. Продержись 24 секунды под атаками гигантского спрута."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Portal! Boss cave. Survive the giant octopus for 24 seconds."
+          }
+        }
+      }
+    },
+    "event.tentacle.missed": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Щупальце промахнулось"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The tentacle missed"
+          }
+        }
+      }
+    },
+    "event.boss.complete": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Спрут отступил! Артефакт пещеры добавил 300 к добыче."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The octopus retreated! Cave artifact adds 300 salvage."
+          }
+        }
+      }
+    },
+    "event.crystals": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кристаллы. Плюс 10. Баланс: %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crystals. Plus 10. Balance: %lld"
+          }
+        }
+      }
+    },
+    "a11y.selected.course": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбран курс: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected course: %@"
+          }
+        }
+      }
+    },
+    "a11y.sail": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Плыть"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sail"
+          }
+        }
+      }
+    },
+    "a11y.surroundings": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что вокруг?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What is around?"
+          }
+        }
+      }
+    },
+    "speech.playing": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспедиция продолжается"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expedition in progress"
+          }
+        }
+      }
+    },
+    "speech.paused": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пауза"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused"
+          }
+        }
+      }
+    },
+    "speech.completed": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Груз доставлен: %lld. Рекорд: %lld."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvage delivered: %lld. Record: %lld."
+          }
+        }
+      }
+    },
+    "speech.danger": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Опасность. %@, %lld метров, %@."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Danger. %@, %lld meters, %@."
+          }
+        }
+      }
+    },
+    "speech.cave": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пещера спрута. Продержись ещё %lld секунд."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Octopus cave. Survive for %lld more seconds."
+          }
+        }
+      }
+    },
+    "speech.instruments": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Глубина %lld метров, скорость %lld метров в секунду."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Depth %lld meters, speed %lld meters per second."
+          }
+        }
+      }
+    },
+    "speech.target": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %lld метров, %@."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %lld meters, %@."
+          }
+        }
+      }
+    },
+    "speech.contact": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %lld метров, %@."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %lld meters, %@."
+          }
+        }
+      }
+    },
+    "speech.current": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Течение: %@, %lld метров в секунду."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current: %@, %lld meters per second."
+          }
+        }
+      }
+    }
   },
-  "version" : "1.0"
+  "version": "1.0"
 }

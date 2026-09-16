@@ -289,10 +289,11 @@ final class GameEngineTests: XCTestCase {
         level.mines = [OceanMine(id: 4, position: CGPoint(x: 390, y: 300))]
         level.pickups = [OceanPickup(id: 7, kind: .battery, position: CGPoint(x: 300, y: 410))]
         let engine = makeEngine(level: level)
+        advance(engine, 0.1)
         let description = engine.surroundingsDescription
-        XCTAssertTrue(description.contains("Мина"))
-        XCTAssertTrue(description.contains("батарея"))
-        XCTAssertTrue(description.contains("цель"))
+        XCTAssertTrue(description.contains(A11yL10n.contactKind(.mine)))
+        XCTAssertTrue(engine.sonarContacts.contains { $0.kind == .battery })
+        XCTAssertTrue(description.contains(A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик")))
         XCTAssertTrue(engine.accessibilityStatus.contains("Энергия"))
     }
 
@@ -320,7 +321,7 @@ final class GameEngineTests: XCTestCase {
         level.portalCandidates = [CGPoint(x: 750, y: 750), CGPoint(x: 520, y: 300)]
         XCTAssertNil(makeEngine(level: level, randomValues: [0.9]).portal)
 
-        let engine = makeEngine(level: level, randomValues: [0.1, 0.8])
+        let engine = makeEngine(level: level, randomValues: [0.1, 0.0])
         XCTAssertEqual(engine.portal?.position, CGPoint(x: 520, y: 300))
         XCTAssertNil(level.rocks[0].contact(at: engine.portal!.position, radius: 54))
     }
@@ -331,7 +332,7 @@ final class GameEngineTests: XCTestCase {
         let engine = makeEngine(level: level, randomValues: [0.1, 0])
         engine.activateSonar()
         XCTAssertTrue(engine.portalRevealed)
-        XCTAssertTrue(engine.notice.contains("портал"))
+        XCTAssertEqual(engine.notice, A11yL10n.text("event.portal.revealed", defaultValue: "Сонар обнаружил портал в пещеру"))
         advance(engine, 0.01)
         XCTAssertEqual(engine.zone, .bossCave)
         XCTAssertNil(engine.portal)
@@ -364,7 +365,7 @@ final class GameEngineTests: XCTestCase {
         XCTAssertTrue(engine.bossDefeated)
         XCTAssertEqual(engine.bossReward, 300)
         XCTAssertEqual(engine.position.x, returnPoint.x, accuracy: 1)
-        XCTAssertTrue(engine.notice.contains("Спрут отступил"))
+        XCTAssertEqual(engine.notice, A11yL10n.text("event.boss.complete", defaultValue: "Спрут отступил! Артефакт пещеры добавил 300 к добыче."))
     }
 
     func testPauseFreezesMinesResourcesAbilitiesAndAnimation() {
@@ -642,26 +643,27 @@ final class GameEngineTests: XCTestCase {
         defer { token.cancel() }
         engine.activateBoost()
         advance(engine, 0.01)
-        XCTAssertEqual(events, [.speak("Мина активирована — отойди!"),
-                                .speak("Батарея · +30 энергии"), .speak("Щит · защита от одного удара"),
-                                .speak("Образец на борту · +75 к добыче"), .objectiveChanged(true),
-                                .speak("Чёрный ящик найден. Вернись на базу!")])
+        XCTAssertEqual(events, [.danger(A11yL10n.text("event.mine", defaultValue: "Мина активирована — отойди!")),
+                                .speak(A11yL10n.text("event.battery", defaultValue: "Батарея. Плюс 30 энергии")), .speak(A11yL10n.text("event.shield", defaultValue: "Щит. Защита от одного удара")),
+                                .speak(A11yL10n.text("event.sample", defaultValue: "Образец на борту. Плюс 75 к добыче")), .objectiveChanged(true),
+                                .speak(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!")),
+                                .speak(A11yL10n.text("event.docking", defaultValue: "База рядом. Остановись в круге базы для швартовки."))])
         // Separate stationary fixture guarantees the mine hits rather than boosting away.
         let stationary = makeEngine(level: level)
         var hits: [GameEvent] = []
         let hitToken = stationary.events.sink { if case .situation = $0 {} else { hits.append($0) } }
         defer { hitToken.cancel() }
         advance(stationary, 3)
-        XCTAssertEqual(hits.filter { $0 == .speak("Мина активирована — отойди!") }.count, 1)
-        XCTAssertEqual(hits.filter { $0 == .speak("Щит поглотил удар") }.count, 1)
-        XCTAssertLessThan(hits.firstIndex(of: .speak("Мина активирована — отойди!"))!, hits.firstIndex(of: .speak("Щит поглотил удар"))!)
+        XCTAssertEqual(hits.filter { $0 == .danger(A11yL10n.text("event.mine", defaultValue: "Мина активирована — отойди!")) }.count, 1)
+        XCTAssertEqual(hits.filter { $0 == .danger(A11yL10n.text("event.shield.hit", defaultValue: "Щит поглотил удар")) }.count, 1)
+        XCTAssertEqual(hits.filter { if case .danger = $0 { return true }; return false }.prefix(2), [.danger(A11yL10n.text("event.mine", defaultValue: "Мина активирована — отойди!")), .danger(A11yL10n.text("event.shield.hit", defaultValue: "Щит поглотил удар"))])
         level.pickups = []
         let unshielded = makeEngine(level: level)
         var damage: [GameEvent] = []
         let damageToken = unshielded.events.sink { damage.append($0) }
         defer { damageToken.cancel() }
         advance(unshielded, 3)
-        XCTAssertEqual(damage.filter { $0 == .speak("Корпус повреждён · 2/3") }.count, 1)
+        XCTAssertEqual(damage.filter { $0 == .danger(A11yL10n.format("event.hull.damage.format", defaultValue: "Корпус повреждён. %lld из 3", Int64(2))) }.count, 1)
     }
 
     func testAccessibilityEnergyWarningAndEndExactlyOncePerRun() {
@@ -672,11 +674,11 @@ final class GameEngineTests: XCTestCase {
         for _ in 0..<2 {
             engine.setSteering(CompassCourse.e.vector)
             advance(engine, 95)
-            XCTAssertEqual(Array(events.suffix(3)), [.energyLow, .speak("Энергия закончилась"), .stateChanged(.gameOver)])
+            XCTAssertEqual(Array(events.suffix(3)), [.energyLow, .danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась")), .stateChanged(.gameOver)])
             engine.startGame()
         }
         XCTAssertEqual(events.filter { $0 == .energyLow }.count, 2)
-        XCTAssertEqual(events.filter { $0 == .speak("Энергия закончилась") }.count, 2)
+        XCTAssertEqual(events.filter { $0 == .danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась")) }.count, 2)
     }
 
     func testSituationDeterminismFrequencyAndCompassGeometry() {
@@ -726,8 +728,140 @@ final class GameEngineTests: XCTestCase {
         let token = engine.events.sink { events.append($0) }
         defer { token.cancel() }
         advance(engine, 1)
-        XCTAssertEqual(events, [.objectiveChanged(true), .speak("Чёрный ящик найден. Вернись на базу!"),
+        XCTAssertEqual(events, [.objectiveChanged(true), .speak(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!")),
                                 .success(600), .record(600), .stateChanged(.completed)])
     }
+
+    func testHiddenCrystalStaysHiddenInAllNavigationUntilRevealed() {
+        // given: light reaches this crystal, passive discovery does not.
+        var level = empty
+        level.pickups = [.init(id: 80, kind: .crystal, position: CGPoint(x: 800, y: 300))]
+        let engine = makeEngine(level: level)
+        engine.activateLightBoost()
+        advance(engine, 0.1)
+
+        // when / then: light cannot bypass sonar discovery.
+        XCTAssertFalse(engine.sonarContacts.contains { $0.id == "pickup-80" })
+        XCTAssertNil(engine.situationSummary.find)
+        XCTAssertFalse(engine.surroundingsDescription.contains(A11yL10n.contactKind(.crystal)))
+        engine.activateSonar()
+        XCTAssertTrue(engine.sonarContacts.contains { $0.id == "pickup-80" && $0.kind == .crystal })
+        XCTAssertEqual(engine.situationSummary.find?.id, "pickup:80")
+        XCTAssertTrue(engine.surroundingsDescription.contains(A11yL10n.contactKind(.crystal)))
+    }
+
+    func testCaveNavigationAndAnnouncementsExcludeOceanContacts() {
+        // given: an ocean contact and current would otherwise leak into cave coordinates.
+        var level = empty
+        level.portalCandidates = [level.spawn]
+        level.pickups = [.init(id: 80, kind: .crystal, position: CGPoint(x: 400, y: 300))]
+        level.currents = [.init(id: 8, bounds: CGRect(x: 0, y: 0, width: 1000, height: 1000), velocity: CGVector(dx: 30, dy: 0))]
+        let engine = makeEngine(level: level, randomValues: [0, 0])
+        var events: [GameEvent] = []
+        let token = engine.events.sink { events.append($0) }
+        defer { token.cancel() }
+
+        engine.activateSonar()
+        XCTAssertNotNil(engine.situationSummary.find)
+
+        // when
+        advance(engine, 1.8)
+
+        // then
+        XCTAssertEqual(engine.zone, .bossCave)
+        XCTAssertEqual(Set(engine.sonarContacts.map(\.id)), ["boss", "tentacle"])
+        XCTAssertNil(engine.situationSummary.find)
+        XCTAssertNil(engine.situationSummary.currentCourse)
+        XCTAssertEqual(engine.situationSummary.danger?.id, "tentacle")
+        XCTAssertNotNil(engine.situationSummary.caveTimeRemaining)
+        XCTAssertTrue(VoiceOverAnnouncer.format(engine.situationSummary).hasPrefix(A11yL10n.format("speech.cave", defaultValue: "Пещера спрута. Продержись ещё %lld секунд.", Int64(engine.situationSummary.caveTimeRemaining ?? -1))))
+        XCTAssertTrue(events.contains { if case .danger(let text) = $0 { return text == A11yL10n.text("event.tentacle.warning", defaultValue: "Удар щупальца! Уходи в сторону или используй форсаж.") }; return false })
+    }
+
+    func testLightBoostWarnsAtThresholdAndEndsRunAtZeroEnergy() {
+        // given
+        let engine = makeEngine()
+        var events: [GameEvent] = []
+        let token = engine.events.sink { events.append($0) }
+        defer { token.cancel() }
+
+        // when
+        for index in 0..<19 {
+            engine.activateLightBoost()
+            if index == 14 { XCTAssertEqual(events.filter { $0 == .energyLow }.count, 1) }
+            advance(engine, GameEngine.lightBoostRecharge + 0.1)
+        }
+        XCTAssertEqual(engine.energy, 5)
+        engine.activateLightBoost()
+
+        // then: no extra physics tick is needed to finish.
+        XCTAssertEqual(engine.state, .gameOver)
+        XCTAssertEqual(engine.failureReason, .energy)
+        XCTAssertFalse(engine.isLightBoostActive)
+        XCTAssertEqual(events.filter { $0 == .energyLow }.count, 1)
+    }
+
+    func testEveryUrgentEventReachesTheSingleSpeechSinkAndVoiceOverOffDropsIt() {
+        // given: repeated mine text represents two different mines, not a repeated frame.
+        let engine = makeEngine()
+        var enabled = true
+        var spoken: [NSAttributedString] = []
+        let announcer = VoiceOverAnnouncer(engine: engine, voiceOverRunning: { enabled }, post: { spoken.append($0) })
+        let warning = A11yL10n.text("event.mine", defaultValue: "Мина активирована — отойди!")
+
+        // when
+        engine.events.send(.danger(warning))
+        engine.events.send(.danger(warning))
+        enabled = false
+        engine.events.send(.danger("must not be spoken"))
+        enabled = true
+        engine.events.send(.danger(warning))
+
+        // then
+        XCTAssertEqual(spoken.map(\.string), [warning, warning, warning])
+        XCTAssertTrue(spoken.allSatisfy { ($0.attribute(.accessibilitySpeechQueueAnnouncement, at: 0, effectiveRange: nil) as? Bool) == false })
+        withExtendedLifetime(announcer) {}
+    }
+
+    func testApproachWarningsEscalateAndRearmWithoutRepeatingEachFrame() {
+        // given
+        let engine = makeEngine()
+        var spoken: [String] = []
+        let announcer = VoiceOverAnnouncer(engine: engine, voiceOverRunning: { true }, now: { 10 }, post: { spoken.append($0.string) })
+        func summary(distance: Int) -> SituationSummary {
+            .init(depth: 10, speed: 5, returning: false, targetDistance: 100, targetCourse: .e,
+                  danger: .init(id: "reef", name: "Reef", distance: distance, course: .e),
+                  find: nil, currentCourse: nil, currentSpeed: 0, caveTimeRemaining: nil)
+        }
+
+        // when
+        for distance in [25, 25, 25, 15, 15, 7, 7, 40, 25] {
+            engine.events.send(.situation(summary(distance: distance)))
+        }
+
+        // then: near, danger, critical, then a new approach.
+        XCTAssertEqual(spoken, [25, 15, 7, 25].map {
+            A11yL10n.format("speech.danger", defaultValue: "Опасность. %@, %lld метров, %@.", "Reef", Int64($0), CompassCourse.e.label)
+        })
+        withExtendedLifetime(announcer) {}
+    }
+
+    func testSelectingVoiceOverCourseSurvivesRegularViewUpdates() {
+        // given
+        let steering = SteeringSurface()
+        steering.updateAccessibility(steering: .zero, contacts: [])
+
+        // when: choose east while stationary, then receive another display refresh.
+        steering.accessibilityIncrement()
+        steering.accessibilityIncrement()
+        steering.updateAccessibility(steering: .zero, contacts: [])
+
+        // then: the value must retain the selected direction rather than read only Stop.
+        let expected = A11yL10n.format("a11y.steering.value.format", defaultValue: "Курс: %@, тяга %lld процентов",
+                                      A11yL10n.text("a11y.course.stop", defaultValue: "стоп"), Int64(0))
+            + ". " + A11yL10n.format("a11y.selected.course", defaultValue: "Выбран курс: %@", CompassCourse.e.label)
+        XCTAssertEqual(steering.accessibilityValue, expected)
+    }
+
 
 }

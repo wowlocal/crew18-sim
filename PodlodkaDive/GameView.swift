@@ -7,6 +7,7 @@ struct GameView: View {
     @StateObject private var announcer: VoiceOverAnnouncer
     @AccessibilityFocusState private var focusedControl: String?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
     @State private var showingMap = false
@@ -17,11 +18,6 @@ struct GameView: View {
 
     init(engine: GameEngine = GameEngine()) {
         let arguments = ProcessInfo.processInfo.arguments
-#if DEBUG
-        if let marker = arguments.firstIndex(of: "-accessibilityAuditState"), arguments.indices.contains(marker + 1) {
-            engine.prepareAccessibilityAuditState(arguments[marker + 1])
-        }
-#endif
         _engine = StateObject(wrappedValue: engine)
         _showingMap = State(initialValue: arguments.contains("map"))
         _announcer = StateObject(wrappedValue: VoiceOverAnnouncer(engine: engine))
@@ -38,32 +34,56 @@ struct GameView: View {
                         .accessibilityHidden(true)
                 }
                 if engine.state == .ready {
-                    welcome(size: proxy.size, insets: proxy.safeAreaInsets)
+                    ScrollView {
+                        welcome(size: proxy.size, insets: proxy.safeAreaInsets)
+                            .frame(minHeight: proxy.size.height)
+                    }
                 } else {
-                    instruments(insets: proxy.safeAreaInsets)
-                        .allowsHitTesting(engine.state == .playing)
-                        .accessibilityHidden(engine.state != .playing)
                     if engine.state == .playing {
-                        objectivePointer(size: proxy.size)
-                        controls(insets: proxy.safeAreaInsets)
+                        if dynamicTypeSize.isAccessibilitySize {
+                            largeTextInstruments(insets: proxy.safeAreaInsets)
+                        } else {
+                            instruments(insets: proxy.safeAreaInsets)
+                            objectivePointer(size: proxy.size)
+                            controls(insets: proxy.safeAreaInsets)
+                        }
                     }
                     if engine.state != .playing {
                         OceanPalette.ink.opacity(0.78).ignoresSafeArea()
                         if showingMap {
-                            mapPanel(height: proxy.size.height)
+                            ScrollView {
+                                mapPanel(height: proxy.size.height)
+                                    .padding(.vertical, max(proxy.safeAreaInsets.top, 48))
+                            }
                         } else {
-                            resultPanel
+                            ScrollView {
+                                resultPanel.padding(.vertical, max(proxy.safeAreaInsets.top, 48))
+                                    .frame(minHeight: proxy.size.height)
+                            }
                         }
                     }
                 }
             }
-            .onAppear { engine.resize(to: proxy.size); engine.startLoop() }
+            .onAppear {
+                engine.resize(to: proxy.size)
+#if DEBUG
+                let arguments = ProcessInfo.processInfo.arguments
+                if let marker = arguments.firstIndex(of: "-accessibilityAuditState"), arguments.indices.contains(marker + 1) {
+                    engine.prepareAccessibilityAuditState(arguments[marker + 1])
+                }
+#endif
+                engine.startLoop()
+            }
             .onDisappear { engine.stopLoop() }
             .onChange(of: proxy.size) { _, size in engine.resize(to: size) }
         }
         .ignoresSafeArea()
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
+        .tint(OceanPalette.teal)
+        .onChange(of: dynamicTypeSize) { _, _ in engine.setSteering(.zero) }
+        .onChange(of: voiceOverEnabled) { _, _ in engine.setSteering(.zero) }
+        .onChange(of: voiceOverButtons) { _, _ in engine.setSteering(.zero) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { engine.pause() } }
         .sensoryFeedback(.selection, trigger: engine.pickupCount)
         .sensoryFeedback(.error, trigger: engine.damageCount)
@@ -82,18 +102,47 @@ struct GameView: View {
             guard !Task.isCancelled, UIAccessibility.isVoiceOverRunning else { return }
             UIAccessibility.post(notification: .screenChanged, argument: nil)
             focusedControl = destination
+            if showingMap { announcer.describeMap() }
         }
         .sheet(isPresented: $showingGarage) { garagePanel }
 
     }
 
+    private func largeTextInstruments(insets: EdgeInsets) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text(engine.objectiveText).font(.title2).accessibilityAddTraits(.isHeader)
+                Text(engine.accessibilityStatus).font(.body)
+                Text(engine.sectorOverview).font(.body)
+                SteeringPad(onInput: engine.setSteering, steering: engine.steering,
+                            contacts: engine.sonarContacts, onSummary: announcer.describeSurroundings)
+                    .frame(height: 158).accessibilityFocused($focusedControl, equals: "steeringPad")
+                Button("Что вокруг?", action: announcer.describeSurroundings)
+                Button("Сонар", action: engine.activateSonar)
+                    .disabled(!engine.canSonar).accessibilityIdentifier("sonar")
+                Button("Форсаж", action: engine.activateBoost)
+                    .disabled(!engine.canBoost).accessibilityIdentifier("boost")
+                Button("Усилить фары", action: engine.activateLightBoost)
+                    .disabled(!engine.canLightBoost).accessibilityIdentifier("lightBoost")
+                if engine.zone == .ocean {
+                    Button("Карта экспедиции", action: openMap).accessibilityIdentifier("openMap")
+                }
+                Button("Пауза", action: engine.pause).accessibilityIdentifier("pauseDive")
+            }
+            .buttonStyle(.bordered).controlSize(.large)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(24).padding(.top, max(insets.top, 48)).padding(.bottom, max(insets.bottom, 24))
+        }
+        .background(OceanPalette.ink)
+    }
+
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
         VStack(spacing: 0) {
-            HStack {
+            (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())) {
                 brand
                 Spacer()
                 Label("\(engine.bestScore)", systemImage: "trophy")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .font(.system(.body, design: .monospaced).weight(.semibold))
                     .foregroundStyle(OceanPalette.gold)
                     .padding(.horizontal, 13).padding(.vertical, 10)
                     .background(OceanPalette.gold.opacity(0.08), in: Capsule())
@@ -103,17 +152,19 @@ struct GameView: View {
             .padding(.top, max(insets.top, 48) + 12)
             VStack(spacing: 12) {
                 Text("СВОБОДНЫЙ ОКЕАН")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .tracking(3).foregroundStyle(OceanPalette.teal)
+                    .font(.system(.body, design: .monospaced).weight(.semibold))
+                    .tracking(0).foregroundStyle(OceanPalette.teal)
                 Text("Курс на глубину.")
-                    .font(.system(size: size.height < 720 ? 35 : 41, weight: .bold, design: .rounded))
+                    .font(.system(.largeTitle, design: .rounded).weight(.bold))
                     .tracking(-1.5).foregroundStyle(OceanPalette.white)
-                    .minimumScaleFactor(0.7).lineLimit(1)
+
                 Text("Аварийная темнота. Найди чёрный ящик и вернись.")
-                    .font(.system(size: 12, weight: .medium)).foregroundStyle(OceanPalette.muted)
+                    .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
                     .multilineTextAlignment(.center)
+                    .background(OceanPalette.ink)
             }
             .padding(.top, size.height * 0.045)
+            .frame(minHeight: 44)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(A11yL10n.text("a11y.welcome.title", defaultValue: "Podlodka Dive. Курс на глубину."))
             .accessibilityValue(A11yL10n.text("a11y.welcome.objective", defaultValue: "Найди чёрный ящик и вернись с добычей."))
@@ -122,14 +173,15 @@ struct GameView: View {
             VStack(spacing: size.height < 720 ? 16 : 22) {
                 HStack(spacing: 7) {
                     Circle().fill(OceanPalette.teal).frame(width: 4, height: 4)
-                    Text("ЭКСПЕДИЦИЯ 01 / ЗАТОНУВШИЙ ASTER")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1)
-                }.foregroundStyle(OceanPalette.teal.opacity(0.85))
+                    Text("ЭКСПЕДИЦИЯ 01 / ЗАТОНУВШИЙ ASTER").fixedSize(horizontal: false, vertical: true)
+                        .font(.system(.body, design: .monospaced).weight(.semibold)).tracking(0)
+                }.foregroundStyle(OceanPalette.teal)
                 HStack(spacing: 0) {
                     instruction(icon: "arrow.up.and.down.and.arrow.left.and.right", title: "Свободный курс", detail: "Тяни стик в любую сторону")
                     Rectangle().fill(OceanPalette.teal.opacity(0.15)).frame(width: 1, height: 48)
                     instruction(icon: "flashlight.on.fill", title: "Свет и сонар", detail: "Усиливай фары. Ищи путь.")
                 }
+                .frame(minHeight: 44).contentShape(Rectangle())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(A11yL10n.text("a11y.welcome.controls", defaultValue: "Управление: свободный курс, сонар и форсаж."))
                 .accessibilityHint(A11yL10n.text("a11y.welcome.controls.hint", defaultValue: "В экспедиции выбирай курс действиями VoiceOver на руле."))
@@ -145,6 +197,7 @@ struct GameView: View {
                 }
                 .accessibilityHint("Кастомизация подлодки перед экспедицией")
                 .accessibilityIdentifier("openGarage")
+                .buttonStyle(.plain).foregroundStyle(OceanPalette.white)
                 Button {
                     showingMap = false
                     engine.startGame()
@@ -164,12 +217,13 @@ struct GameView: View {
                 }
                 .tint(OceanPalette.teal)
                 .accessibilityHint(A11yL10n.text("night.hint", defaultValue: "Затемняет океан и выключает фонарь. Управление не меняется."))
-                Text("Береги корпус и заряд на обратный путь")
-                    .font(.system(size: 11, weight: .medium)).foregroundStyle(OceanPalette.muted)
+                Text("Береги корпус и заряд на обратный путь").fixedSize(horizontal: false, vertical: true)
+                    .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
             }
             .padding(.bottom, max(insets.bottom, 24) + 16)
         }
         .padding(.horizontal, 26)
+        .background(OceanPalette.ink.opacity(0.7))
         .accessibilityElement(children: .contain)
     }
 
@@ -222,27 +276,27 @@ struct GameView: View {
 
     private func applyStyle(_ style: SubmarineStyle) {
         garageMessage = engine.customize(style)
-        UIAccessibility.post(notification: .announcement, argument: garageMessage)
+        if UIAccessibility.isVoiceOverRunning { UIAccessibility.post(notification: .announcement, argument: garageMessage) }
     }
 
     private var brand: some View {
         HStack(spacing: 9) {
-            Text("18").font(.system(size: 15, weight: .bold, design: .monospaced))
-                .foregroundStyle(OceanPalette.teal).frame(width: 35, height: 35)
+            Text("18").font(.system(.body, design: .monospaced).weight(.bold))
+                .foregroundStyle(OceanPalette.teal).frame(minWidth: 44, minHeight: 44)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(OceanPalette.teal.opacity(0.3), lineWidth: 1))
             VStack(alignment: .leading, spacing: 3) {
-                Text("PODLODKA").font(.system(size: 11, weight: .bold)).tracking(2).foregroundStyle(OceanPalette.white)
-                Text("D I V E  /  iOS CREW").font(.system(size: 8, weight: .medium, design: .monospaced)).foregroundStyle(OceanPalette.muted)
+                Text("PODLODKA").fixedSize(horizontal: false, vertical: true).font(.system(.body).weight(.bold)).tracking(0).foregroundStyle(OceanPalette.white)
+                Text("DIVE / iOS CREW").fixedSize(horizontal: false, vertical: true).font(.system(.body, design: .monospaced).weight(.semibold)).foregroundStyle(OceanPalette.white)
             }
         }
     }
 
     private func instruction(icon: String, title: String, detail: String) -> some View {
         VStack(spacing: 7) {
-            Image(systemName: icon).font(.system(size: 19, weight: .medium)).foregroundStyle(OceanPalette.gold)
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(OceanPalette.white)
-            Text(detail).font(.system(size: 9)).foregroundStyle(OceanPalette.muted)
-                .lineLimit(1).minimumScaleFactor(0.8)
+            Image(systemName: icon).font(.system(.title3).weight(.medium)).foregroundStyle(OceanPalette.gold)
+            Text(title).font(.system(.body).weight(.semibold)).fixedSize(horizontal: false, vertical: true).foregroundStyle(OceanPalette.white)
+            Text(detail).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white).fixedSize(horizontal: false, vertical: true).background(OceanPalette.ink)
+
         }.frame(maxWidth: .infinity)
     }
 
@@ -251,32 +305,33 @@ struct GameView: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(engine.zone == .bossCave ? "БОНУСНЫЙ УРОВЕНЬ · ПЕЩЕРА" : "ЭКСПЕДИЦИЯ 01 · \(engine.depth) М")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .tracking(1.2).foregroundStyle(OceanPalette.muted)
+                        .font(.system(.body, design: .monospaced).weight(.semibold))
+                        .tracking(0).foregroundStyle(OceanPalette.white).background(OceanPalette.ink)
                     Text(engine.objectiveText)
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .font(.system(.body, design: .rounded).weight(.semibold))
                         .foregroundStyle(engine.hasBlackBox ? OceanPalette.teal : OceanPalette.white)
-                        .lineLimit(1).minimumScaleFactor(0.8)
+
                 }
                 .allowsHitTesting(false)
+                .frame(minHeight: 44).contentShape(Rectangle())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(A11yL10n.text("a11y.objective.label", defaultValue: "Цель экспедиции"))
-                .accessibilityValue(engine.hasBlackBox
+                .accessibilityValue(engine.zone == .bossCave ? engine.accessibilityStatus : (engine.hasBlackBox
                     ? A11yL10n.text("a11y.objective.base", defaultValue: "Доставить чёрный ящик на базу")
-                    : A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик"))
+                    : A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик")))
                 .accessibilitySortPriority(8)
                 Spacer(minLength: 0)
                 hudButton("ear", label: "Озвучить обстановку", id: "speakSurroundings", action: announcer.describeSurroundings)
                 if engine.zone == .ocean {
-                hudButton("map", label: A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"), id: "openMap", action: openMap)
+                    hudButton("map", label: A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"), id: "openMap", action: openMap)
                 }
                 hudButton("pause.fill", label: A11yL10n.text("a11y.pause", defaultValue: "Пауза"), id: "pauseDive", action: engine.pause)
             }
             HStack(spacing: 13) {
                 HStack(spacing: 6) {
-                    Image(systemName: "bolt.fill").font(.system(size: 11))
+                    Image(systemName: "bolt.fill").font(.system(.body))
                     Text("\(Int(ceil(engine.energy)))%")
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced)).frame(minWidth: 35, alignment: .leading)
+                        .font(.system(.body, design: .monospaced).weight(.semibold)).frame(minWidth: 35, alignment: .leading)
                     Capsule().fill(OceanPalette.teal.opacity(0.14)).frame(width: 40, height: 4)
                         .overlay(alignment: .leading) {
                             Capsule().fill(engine.energy < 25 ? OceanPalette.danger : OceanPalette.teal)
@@ -284,26 +339,33 @@ struct GameView: View {
                         }
                 }
                 .foregroundStyle(engine.energy < 25 ? OceanPalette.danger : OceanPalette.teal)
+                .frame(minHeight: 44).contentShape(Rectangle())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(A11yL10n.text("a11y.energy.label", defaultValue: "Энергия"))
                 .accessibilityValue(A11yL10n.format("a11y.percent.format", defaultValue: "%lld процентов", Int64(engine.energy)))
+                .frame(minHeight: 44)
                 .accessibilitySortPriority(7)
                 HStack(spacing: 4) {
                     ForEach(0..<3) { index in
                         Image(systemName: index < engine.hull ? "heart.fill" : "heart")
-                            .font(.system(size: 11)).foregroundStyle(index < engine.hull ? OceanPalette.danger : OceanPalette.muted.opacity(0.4))
+                            .font(.system(.body)).foregroundStyle(index < engine.hull ? OceanPalette.danger : OceanPalette.white.opacity(0.4))
                     }
-                    if engine.hasShield { Image(systemName: "shield.fill").font(.system(size: 11)).foregroundStyle(OceanPalette.blue) }
+                    if engine.hasShield { Image(systemName: "shield.fill").font(.system(.body)).foregroundStyle(OceanPalette.blue) }
                 }
+                .frame(minHeight: 44).contentShape(Rectangle())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(A11yL10n.text("a11y.hull.label", defaultValue: "Корпус"))
                 .accessibilityValue(hullAccessibilityValue)
+                .frame(minHeight: 44)
                 .accessibilitySortPriority(6)
                 Spacer(minLength: 0)
                 Label("\(engine.cargoValue)", systemImage: "shippingbox")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced)).foregroundStyle(OceanPalette.gold)
+                    .font(.system(.body, design: .monospaced).weight(.semibold)).foregroundStyle(OceanPalette.gold)
+                    .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel(A11yL10n.text("a11y.cargo.label", defaultValue: "Груз на борту"))
                     .accessibilityValue("\(engine.cargoValue)")
+                    .frame(minWidth: 44, minHeight: 44)
                     .accessibilitySortPriority(5)
             }
             .allowsHitTesting(false)
@@ -313,16 +375,19 @@ struct GameView: View {
                 Text(engine.zone == .bossCave
                      ? "СПРУТ · \(Int(ceil(engine.bossTimeRemaining))) С"
                      : "\(engine.hasBlackBox ? "БАЗА" : "СИГНАЛ") · \(engine.targetDistance) М")
-                    .tracking(1)
+                    .tracking(0)
                 Spacer()
                 if engine.zone == .ocean, engine.hasBlackBox { Label("ЯЩИК НА БОРТУ", systemImage: "checkmark").foregroundStyle(OceanPalette.teal) }
             }
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .foregroundStyle(OceanPalette.gold.opacity(0.85)).allowsHitTesting(false)
+            .font(.system(.body, design: .monospaced).weight(.semibold))
+            .foregroundStyle(OceanPalette.gold).allowsHitTesting(false)
+            .frame(minHeight: 44)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(A11yL10n.text("a11y.target.course", defaultValue: "Курс на цель"))
             .accessibilityValue(A11yL10n.format("a11y.target.value.format", defaultValue: "Сигнал: %lld метров, на %lld часов",
                                                 Int64(engine.targetDistance), Int64(engine.targetClockHour)))
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
             .accessibilitySortPriority(4)
             Spacer()
         }
@@ -335,8 +400,8 @@ struct GameView: View {
 
     private func hudButton(_ icon: String, label: String, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(OceanPalette.white).frame(width: 42, height: 42)
+            Image(systemName: icon).font(.system(.body).weight(.semibold))
+                .foregroundStyle(OceanPalette.white).frame(width: 44, height: 44)
                 .background(OceanPalette.ink.opacity(0.6), in: Circle())
                 .overlay(Circle().stroke(OceanPalette.teal.opacity(0.22), lineWidth: 1))
         }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(id)
@@ -345,10 +410,6 @@ struct GameView: View {
     private func openMap() {
         engine.pause()
         showingMap = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            UIAccessibility.post(notification: .screenChanged, argument: nil)
-            engine.announceSectorOverview()
-        }
     }
 
     private func controls(insets: EdgeInsets) -> some View {
@@ -356,12 +417,12 @@ struct GameView: View {
             Spacer()
             if engine.energy < 25 {
                 Label("Мало энергии — ищи батарею или возвращайся", systemImage: "bolt.trianglebadge.exclamationmark")
-                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(OceanPalette.danger)
+                    .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.danger)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(OceanPalette.ink.opacity(0.85), in: Capsule()).allowsHitTesting(false)
             }
             if engine.noticeRemaining > 0 {
-                Text(engine.notice).font(.system(size: 11, weight: .medium))
+                Text(engine.notice).font(.system(.body).weight(.semibold))
                     .foregroundStyle(OceanPalette.white).multilineTextAlignment(.center)
                     .padding(.horizontal, 15).padding(.vertical, 9)
                     .background(OceanPalette.ink.opacity(0.85), in: Capsule())
@@ -372,12 +433,12 @@ struct GameView: View {
                 if voiceOverEnabled && voiceOverButtons {
                     VoiceOverSteeringControls(onMove: engine.moveForVoiceOver)
                         .accessibilityFocused($focusedControl, equals: "steeringPad")
-                        .frame(width: 174, height: 158)
+                        .frame(width: 174, height: 170)
                 } else {
                 SteeringPad(onInput: engine.setSteering, steering: engine.steering,
                             contacts: engine.sonarContacts, onSummary: { announcer.describeSurroundings() })
                     .accessibilityFocused($focusedControl, equals: "steeringPad")
-                    .frame(width: 174, height: 158)
+                    .frame(width: 174, height: 170)
                     .accessibilitySortPriority(3)
                 }
                 Spacer(minLength: 0)
@@ -414,7 +475,7 @@ struct GameView: View {
                     }
                     if engine.runElapsed < 12 {
                         Text("Отпусти стик, чтобы зависнуть")
-                            .font(.system(size: 8)).foregroundStyle(OceanPalette.muted)
+                            .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
                             .allowsHitTesting(false)
                     }
                 }
@@ -447,13 +508,14 @@ struct GameView: View {
         return Group {
             if !bounds.contains(point) {
                 Image(systemName: "location.north.fill")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(.callout).weight(.medium))
                     .rotationEffect(.radians(atan2(engine.target.y - engine.position.y, engine.target.x - engine.position.x) + .pi / 2))
                     .foregroundStyle(engine.hasBlackBox ? OceanPalette.teal : OceanPalette.gold)
-                    .frame(width: 33, height: 33)
+                    .frame(width: 44, height: 44)
                     .background(OceanPalette.ink.opacity(0.7), in: Circle())
                     .overlay(Circle().stroke(OceanPalette.gold.opacity(0.25), lineWidth: 1))
                     .position(x: x * scale, y: y * scale)
+                    .accessibilityHidden(true)
             }
         }.allowsHitTesting(false).accessibilityHidden(true)
     }
@@ -462,15 +524,15 @@ struct GameView: View {
         VStack(spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("КАРТА ЭКСПЕДИЦИИ").font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.5).foregroundStyle(OceanPalette.teal)
-                    Text("Сектор «Aster»").font(.system(size: 24, weight: .semibold, design: .rounded)).foregroundStyle(OceanPalette.white)
+                    Text("КАРТА ЭКСПЕДИЦИИ").font(.system(.body, design: .monospaced).weight(.semibold)).tracking(0).foregroundStyle(OceanPalette.teal)
+                    Text("Сектор «Aster»").font(.system(.title2, design: .rounded).weight(.semibold)).foregroundStyle(OceanPalette.white)
                 }
                 Spacer()
-                Text("ПАУЗА").font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(OceanPalette.muted)
+                Text("ПАУЗА").font(.system(.body, design: .monospaced).weight(.semibold)).foregroundStyle(OceanPalette.white)
             }
             .accessibilityHidden(true)
             ExpeditionMap(engine: engine)
-                .accessibilityValue(VoiceOverAnnouncer.format(engine.situationSummary))
+                .accessibilityHidden(true)
                 .frame(height: min(395, height * 0.49))
                 .background(OceanPalette.ink.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
             VStack(spacing: 9) {
@@ -489,8 +551,12 @@ struct GameView: View {
             }
             .accessibilityHidden(true)
             Text("Сонар отмечает находки. Линия — пройденный путь.")
-                .font(.system(size: 10)).foregroundStyle(OceanPalette.muted).multilineTextAlignment(.center)
+                .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white).multilineTextAlignment(.center)
                 .accessibilityHidden(true)
+            ForEach(engine.sonarContacts) { contact in
+                Text(A11yL10n.contact(contact)).font(.body.weight(.semibold)).foregroundStyle(OceanPalette.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             Button {
                 showingMap = false
                 engine.togglePause()
@@ -507,7 +573,7 @@ struct GameView: View {
     }
 
     private func mapKey(_ icon: String, _ text: String, _ color: Color) -> some View {
-        Label(text, systemImage: icon).font(.system(size: 10)).foregroundStyle(color)
+        Label(text, systemImage: icon).font(.system(.body)).foregroundStyle(color)
     }
 
     private var resultPanel: some View {
@@ -517,18 +583,22 @@ struct GameView: View {
         let detail = paused ? "Экспедиция на паузе. Заряд сохраняется." : (success ? "Чёрный ящик на базе. Хорошая работа, капитан." : (engine.failureReason == .energy ? "Заряд закончился. Груз остался на глубине." : "Корпус не выдержал. Груз остался на глубине."))
         return VStack(spacing: 22) {
             Image(systemName: paused ? "pause.fill" : (success ? "shippingbox.fill" : "water.waves"))
-                .font(.system(size: 28, weight: .medium)).foregroundStyle(success ? OceanPalette.gold : OceanPalette.teal)
+                .font(.system(.title).weight(.medium)).foregroundStyle(success ? OceanPalette.gold : OceanPalette.teal)
                 .frame(width: 72, height: 72)
                 .background(OceanPalette.teal.opacity(0.07), in: Circle())
                 .overlay(Circle().stroke(OceanPalette.teal.opacity(0.15), lineWidth: 1))
+                .accessibilityHidden(true)
             VStack(spacing: 10) {
                 Text(paused ? "ТИХАЯ ВОДА" : (engine.isNewRecord ? "НОВЫЙ РЕКОРД ЭКСПЕДИЦИИ" : "ЭКСПЕДИЦИЯ ЗАВЕРШЕНА"))
-                    .font(.system(size: 8, weight: .medium, design: .monospaced)).tracking(1.5).foregroundStyle(OceanPalette.teal)
-                Text(title).font(.system(size: 30, weight: .bold, design: .rounded)).tracking(-0.8)
-                    .foregroundStyle(OceanPalette.white).lineLimit(1).minimumScaleFactor(0.75)
-                Text(detail).font(.system(size: 13)).foregroundStyle(OceanPalette.muted).multilineTextAlignment(.center).lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.center)
+                    .font(.system(.body, design: .monospaced).weight(.semibold)).tracking(0).foregroundStyle(OceanPalette.teal)
+                Text(title).font(.system(.title, design: .rounded).weight(.bold)).tracking(-0.8)
+                    .foregroundStyle(OceanPalette.white)
+                Text(detail).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white).fixedSize(horizontal: false, vertical: true).background(OceanPalette.ink).multilineTextAlignment(.center).lineSpacing(3)
             }
+            .frame(minHeight: 44)
             .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier(paused ? "pausedSummary" : (success ? "completedSummary" : "gameOverSummary"))
             .accessibilityLabel(resultAccessibilityTitle(paused: paused, success: success))
             .accessibilityValue(resultAccessibilityDetail(paused: paused, success: success))
             .accessibilityAddTraits(.isHeader)
@@ -553,12 +623,16 @@ struct GameView: View {
                         : A11yL10n.text("a11y.retry", defaultValue: "Новая экспедиция"))
                     .accessibilityFocused($focusedControl, equals: paused ? "resumeDive" : "retryDive")
                 if paused {
-                    Button("Открыть карту", action: openMap)
-                        .font(.system(size: 13, weight: .medium)).foregroundStyle(OceanPalette.teal).frame(minHeight: 35)
+                    Button(action: openMap) {
+                        Text("Открыть карту").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                    }
+                        .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.teal)
                         .accessibilityLabel(A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"))
                 }
-                Button("На поверхность") { showingMap = false; engine.returnToMenu() }
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(OceanPalette.muted).frame(minHeight: 35)
+                Button { showingMap = false; engine.returnToMenu() } label: {
+                    Text("На поверхность").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                }
+                    .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
                     .accessibilityIdentifier("returnToMenu")
                     .accessibilityLabel(A11yL10n.text("a11y.return.menu", defaultValue: "На поверхность"))
             }
@@ -586,10 +660,11 @@ struct GameView: View {
 
     private func resultStat(_ value: Int, title: String, accessibilityTitle: String, highlighted: Bool) -> some View {
         VStack(spacing: 6) {
-            Text("\(value)").font(.system(size: 33, weight: .semibold, design: .rounded)).monospacedDigit()
+            Text("\(value)").font(.system(.title, design: .rounded).weight(.semibold)).monospacedDigit()
                 .foregroundStyle(highlighted ? OceanPalette.white : OceanPalette.gold)
-            Text(title).font(.system(size: 8, weight: .medium, design: .monospaced)).tracking(0.6).foregroundStyle(OceanPalette.muted)
+            Text(title).font(.system(.body, design: .monospaced).weight(.semibold)).fixedSize(horizontal: false, vertical: true).tracking(0).foregroundStyle(OceanPalette.white)
         }.frame(maxWidth: .infinity)
+            .frame(minHeight: 44)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityTitle)
             .accessibilityValue("\(value)")
@@ -622,11 +697,11 @@ private struct VoiceOverSteeringControls: View {
                                  id: String, vector: CGVector) -> some View {
         Button { onMove(vector) } label: {
             VStack(spacing: 2) {
-                Image(systemName: icon).font(.system(size: 14, weight: .bold))
-                Text(title).font(.system(size: 7, weight: .bold, design: .monospaced))
+                Image(systemName: icon).font(.system(.body).weight(.bold))
+                Text(title).font(.system(.body, design: .monospaced).weight(.bold))
             }
             .foregroundStyle(OceanPalette.teal)
-            .frame(width: 60, height: 46)
+            .frame(minWidth: 70, minHeight: 48)
             .background(OceanPalette.ink.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(OceanPalette.teal.opacity(0.35), lineWidth: 1))
         }
@@ -658,10 +733,13 @@ private struct SteeringPad: UIViewRepresentable {
         view.onSummary = onSummary
         view.updateAccessibility(steering: steering, contacts: contacts)
     }
-    static func dismantleUIView(_ view: SteeringSurface, coordinator: ()) { view.releaseInput() }
+    static func dismantleUIView(_ view: SteeringSurface, coordinator: ()) {
+        view.onInput = nil
+        view.releaseInput()
+    }
 }
 
-private final class SteeringSurface: UIView {
+final class SteeringSurface: UIView {
     var onInput: ((CGVector) -> Void)?
     var onSummary: (() -> Void)?
     private var course: CompassCourse = .n
@@ -670,6 +748,7 @@ private final class SteeringSurface: UIView {
     private var knob = CGVector.zero
     private var contacts: [AccessibilityContact] = []
     private var rotorIndex: Int?
+    private var actualSteering = CGVector.zero
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -677,7 +756,7 @@ private final class SteeringSurface: UIView {
         isMultipleTouchEnabled = true
         isAccessibilityElement = true
         accessibilityLabel = A11yL10n.text("a11y.steering.label", defaultValue: "Руль подлодки")
-        accessibilityHint = A11yL10n.text("a11y.steering.hint", defaultValue: "Выберите одно из восьми направлений в действиях VoiceOver или остановку.")
+        accessibilityHint = A11yL10n.text("a11y.steering.hint", defaultValue: "Смахните вверх или вниз для выбора курса, затем выполните действие Плыть. Смена выбранного курса не меняет тягу до команды Плыть. Стоп выключает тягу, но течение может сносить лодку.")
         accessibilityTraits = [.adjustable]
         accessibilityIdentifier = "steeringPad"
         accessibilityCustomActions = [
@@ -710,9 +789,10 @@ private final class SteeringSurface: UIView {
     override func accessibilityDecrement() { changeCourse(-1) }
     private func changeCourse(_ offset: Int) {
         course = CompassCourse(rawValue: (course.rawValue + offset + 8) % 8)!
-        accessibilityValue = course.label
+        rotorIndex = nil
+        updateAccessibility(steering: actualSteering, contacts: contacts)
     }
-    @objc private func sail() -> Bool { onInput?(course.vector); return true }
+    @objc private func sail() -> Bool { steer(course.vector) }
     @objc private func describeWorld() -> Bool { onSummary?(); return true }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -723,12 +803,17 @@ private final class SteeringSurface: UIView {
 
     func updateAccessibility(steering: CGVector, contacts: [AccessibilityContact]) {
         self.contacts = contacts
+        actualSteering = steering
         if let rotorIndex, rotorIndex >= contacts.count { self.rotorIndex = nil }
-        guard rotorIndex == nil else { return }
+        if let rotorIndex {
+            accessibilityValue = A11yL10n.contact(contacts[rotorIndex])
+            return
+        }
         let strength = hypot(steering.dx, steering.dy)
-        let course = courseName(for: steering)
+        let actualCourse = courseName(for: steering)
         accessibilityValue = A11yL10n.format("a11y.steering.value.format", defaultValue: "Курс: %@, тяга %lld процентов",
-                                             course, Int64((strength * 100).rounded()))
+                                             actualCourse, Int64((strength * 100).rounded()))
+            + ". " + A11yL10n.format("a11y.selected.course", defaultValue: "Выбран курс: %@", course.label)
     }
 
     private func courseName(for vector: CGVector) -> String {
@@ -750,6 +835,7 @@ private final class SteeringSurface: UIView {
 
     private func steer(_ vector: CGVector) -> Bool {
         rotorIndex = nil
+        if hypot(vector.dx, vector.dy) > 0.08 { course = CompassCourse(vector: vector) }
         knob = CGVector(dx: vector.dx * 44, dy: vector.dy * 44)
         onInput?(vector)
         updateAccessibility(steering: vector, contacts: contacts)
@@ -793,21 +879,8 @@ private final class SteeringSurface: UIView {
         origin = nil
         knob = .zero
         onInput?(.zero)
-        accessibilityValue = "остановлена"
+        updateAccessibility(steering: .zero, contacts: contacts)
         setNeedsDisplay()
-    }
-
-    @objc private func steerUp() -> Bool { steer(CGVector(dx: 0, dy: -1), value: "курс вверх") }
-    @objc private func steerDown() -> Bool { steer(CGVector(dx: 0, dy: 1), value: "курс вниз") }
-    @objc private func steerLeft() -> Bool { steer(CGVector(dx: -1, dy: 0), value: "курс влево") }
-    @objc private func steerRight() -> Bool { steer(CGVector(dx: 1, dy: 0), value: "курс вправо") }
-    @objc private func stopSteering() -> Bool { releaseInput(); return true }
-
-    private func steer(_ vector: CGVector, value: String) -> Bool {
-        onInput?(vector)
-        accessibilityValue = value
-        UIAccessibility.post(notification: .announcement, argument: value)
-        return true
     }
 
     private func updateInput(_ point: CGPoint) {
@@ -860,11 +933,11 @@ private struct AbilityButton: View {
                     Circle().trim(from: 0, to: min(1, max(0, progress)))
                         .stroke(color.opacity(enabled ? 0.7 : 0.3), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                    Image(systemName: icon).font(.system(size: 20, weight: .medium)).foregroundStyle(color.opacity(enabled ? 1 : 0.4))
+                    Image(systemName: icon).font(.system(.title3).weight(.medium)).foregroundStyle(color.opacity(enabled ? 1 : 0.4))
                 }.frame(width: 55, height: 55)
-                Text(title).font(.system(size: 8, weight: .semibold, design: .monospaced)).tracking(0.6).foregroundStyle(color)
-                Text(detail).font(.system(size: 9)).foregroundStyle(OceanPalette.muted)
-            }.frame(width: 64)
+                Text(title).font(.system(.body, design: .monospaced).weight(.semibold)).fixedSize(horizontal: false, vertical: true).tracking(0).foregroundStyle(color)
+                Text(detail).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white).fixedSize(horizontal: false, vertical: true).background(OceanPalette.ink)
+            }.frame(minWidth: 64)
         }.buttonStyle(.plain).disabled(!enabled)
             .accessibilityLabel(accessibilityLabel)
             .accessibilityValue(accessibilityValue)
@@ -884,11 +957,11 @@ private struct LightBoostButton: View {
         Button(action: action) {
             HStack(spacing: 7) {
                 Image(systemName: active ? "flashlight.on.fill" : "flashlight.off.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(.body).weight(.semibold))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(active ? "УСИЛЕННЫЙ СВЕТ" : "УСИЛИТЬ ФАРЫ")
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    Text(detail).font(.system(size: 8))
+                    Text(active ? "СВЕТ" : "ФАРЫ")
+                        .font(.system(.body, design: .monospaced).weight(.bold))
+                    Text(detail).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
                 }
                 Spacer(minLength: 2)
                 Circle()
@@ -900,7 +973,7 @@ private struct LightBoostButton: View {
             }
             .foregroundStyle(OceanPalette.gold.opacity(enabled || active ? 1 : 0.45))
             .padding(.horizontal, 10)
-            .frame(width: 140, height: 39)
+            .frame(width: 140).frame(minHeight: 48).padding(.vertical, 4)
             .background(OceanPalette.ink.opacity(0.88), in: Capsule())
             .overlay(Capsule().stroke(OceanPalette.gold.opacity(active ? 0.65 : 0.2), lineWidth: 1))
         }
@@ -951,9 +1024,9 @@ private struct ExpeditionMap: View {
             }
             let base = point(engine.level.base), wreck = point(engine.level.wreck), boat = point(engine.position)
             context.stroke(Path(ellipseIn: CGRect(x: base.x - 6, y: base.y - 6, width: 12, height: 12)), with: .color(OceanPalette.teal), lineWidth: 1.4)
-            context.draw(Text("БАЗА").font(.system(size: 9, weight: .medium)).foregroundStyle(OceanPalette.teal), at: CGPoint(x: base.x, y: base.y - 16))
-            context.fill(Path(roundedRect: CGRect(x: wreck.x - 5, y: wreck.y - 4, width: 10, height: 8), cornerRadius: 2), with: .color(engine.hasBlackBox ? OceanPalette.muted : OceanPalette.gold))
-            context.draw(Text(engine.hasBlackBox ? "ASTER" : "ЯЩИК").font(.system(size: 9, weight: .medium)).foregroundStyle(OceanPalette.gold), at: CGPoint(x: wreck.x, y: wreck.y + 15))
+            context.draw(Text(A11yL10n.contactKind(.base)).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.teal), at: CGPoint(x: base.x, y: base.y - 16))
+            context.fill(Path(roundedRect: CGRect(x: wreck.x - 5, y: wreck.y - 4, width: 10, height: 8), cornerRadius: 2), with: .color(engine.hasBlackBox ? OceanPalette.white : OceanPalette.gold))
+            context.draw(Text(engine.hasBlackBox ? "Aster" : A11yL10n.contactKind(.target)).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.gold), at: CGPoint(x: wreck.x, y: wreck.y + 15))
             context.fill(Path(ellipseIn: CGRect(x: boat.x - 4, y: boat.y - 4, width: 8, height: 8)), with: .color(.white))
             context.stroke(Path(ellipseIn: CGRect(x: boat.x - 8, y: boat.y - 8, width: 16, height: 16)), with: .color(.white.opacity(0.4)), lineWidth: 1)
         }
@@ -963,135 +1036,12 @@ private struct ExpeditionMap: View {
 
 private struct DiveButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 15, weight: .bold)).foregroundStyle(OceanPalette.ink)
-            .padding(.horizontal, 20).frame(height: 56)
+        configuration.label.font(.system(.body).weight(.bold)).foregroundStyle(OceanPalette.ink)
+            .padding(.horizontal, 20).padding(.vertical, 16).frame(minHeight: 56)
             .background(LinearGradient(colors: [Color(red: 1, green: 0.83, blue: 0.46), OceanPalette.gold], startPoint: .top, endPoint: .bottom), in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.15), lineWidth: 1))
             .shadow(color: OceanPalette.gold.opacity(0.1), radius: 16, y: 4)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-    }
-}
-
-/// UIKit speech is isolated here; simulation never depends on VoiceOver or wall time.
-@MainActor
-final class VoiceOverAnnouncer: ObservableObject {
-    private struct Message {
-        let key: String
-        let text: String
-        let priority: Int // danger 2 > event 1 > beacon 0
-    }
-    private var subscriptions = Set<AnyCancellable>()
-    private var enabled = UIAccessibility.isVoiceOverRunning
-    private var seen: [String: (text: String, time: TimeInterval)] = [:]
-    private var pending: [Message] = []
-    private var delivery: Task<Void, Never>?
-    private var latest: SituationSummary?
-    private var beacon: SituationSummary?
-    private var lastBeacon = -Double.infinity
-    private var lastDanger = -Double.infinity
-    private weak var engine: GameEngine?
-
-    init(engine: GameEngine) {
-        self.engine = engine
-        engine.events.sink { [weak self] event in self?.receive(event) }.store(in: &subscriptions)
-        NotificationCenter.default.publisher(for: UIAccessibility.voiceOverStatusDidChangeNotification)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                enabled = UIAccessibility.isVoiceOverRunning
-                delivery?.cancel(); delivery = nil; pending.removeAll(); seen.removeAll()
-                beacon = nil; lastBeacon = -.infinity; lastDanger = -.infinity
-            }.store(in: &subscriptions)
-    }
-
-    private func receive(_ event: GameEvent) {
-        if case .situation(let summary) = event { latest = summary }
-        guard enabled else { return }
-        switch event {
-        case .danger(let text):
-            enqueue(key: "danger", text: text, priority: 2)
-        case .speak(let text):
-            let danger = text.hasPrefix("Мина") || text.hasPrefix("Корпус") || text.hasPrefix("Щит поглотил") || text == "Энергия закончилась"
-            enqueue(key: "speech:\(text.components(separatedBy: " ").first ?? text)", text: text, priority: danger ? 2 : 1)
-        case .energyLow: enqueue(key: "energy", text: "Энергия ниже 25 процентов. Ищи батарею или возвращайся", priority: 2)
-        case .objectiveChanged(let returning):
-            enqueue(key: "objective", text: returning ? "Новая цель: база" : "Новая цель: чёрный ящик", priority: 1)
-        case .success(let score): enqueue(key: "success", text: "Груз доставлен: \(score)", priority: 1)
-        case .record(let score): enqueue(key: "record", text: "Новый рекорд: \(score)", priority: 1)
-        case .stateChanged(let state):
-            seen.removeAll()
-            if state != .playing { pending.removeAll { $0.priority == 0 } }
-            if state == .playing && engine?.runElapsed == 0 {
-                beacon = nil; latest = nil; lastBeacon = -.infinity
-            }
-            let text: String
-            switch state {
-            case .ready: text = "Главное меню"
-            case .playing: text = "Экспедиция продолжается"
-            case .paused: text = "Пауза"
-            case .completed: text = "Экспедиция завершена"
-            case .gameOver: text = "Экспедиция потеряна"
-            }
-            enqueue(key: "state", text: text, priority: 1)
-        case .situation(let summary):
-            let now = ProcessInfo.processInfo.systemUptime
-            guard now - lastBeacon >= 5, now - lastDanger >= 2 else { return }
-            if let old = beacon {
-                guard abs(old.targetDistance - summary.targetDistance) >= 20 || old.targetCourse != summary.targetCourse ||
-                        old.returning != summary.returning || old.danger?.id != summary.danger?.id || old.find?.id != summary.find?.id ||
-                        old.currentCourse != summary.currentCourse else { return }
-            }
-            beacon = summary; lastBeacon = now
-            enqueue(key: "beacon", text: Self.format(summary), priority: 0)
-        }
-    }
-
-    func describeSurroundings() {
-        guard enabled, let engine, engine.state == .playing else { return }
-        let summary = latest ?? engine.situationSummary
-        // Explicit requests bypass repeat suppression and the automatic beacon timer.
-        UIAccessibility.post(notification: .announcement, argument: Self.format(summary))
-    }
-
-    private func enqueue(key: String, text: String, priority: Int) {
-        guard seen[key]?.text != text else { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        seen[key] = (text, now)
-        if priority == 2 {
-            lastDanger = now
-            pending.removeAll { $0.priority == 0 }
-            delivery?.cancel(); delivery = nil
-        }
-        pending.removeAll { $0.key == key }
-        pending.append(Message(key: key, text: text, priority: priority))
-        drain()
-    }
-
-    private func drain() {
-        guard delivery == nil, !pending.isEmpty, enabled else { return }
-        let priority = pending.map(\.priority).max()!
-        let index = pending.firstIndex { $0.priority == priority }!
-        let message = pending.remove(at: index)
-        let speech = NSMutableAttributedString(string: message.text)
-        speech.addAttribute(.accessibilitySpeechQueueAnnouncement, value: message.priority < 2, range: NSRange(location: 0, length: speech.length))
-        UIAccessibility.post(notification: .announcement, argument: speech)
-        delivery = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(2)) } catch { return }
-            guard let self else { return }
-            delivery = nil
-            drain()
-        }
-    }
-
-    static func format(_ summary: SituationSummary) -> String {
-        var parts = ["Глубина \(summary.depth) метров, скорость \(summary.speed) метров в секунду",
-                     "\(summary.returning ? "База" : "Ящик"): \(summary.targetDistance) метров, \(summary.targetCourse.label)"]
-        for contact in [summary.danger, summary.find].compactMap({ $0 }) {
-            parts.append("\(contact.name): \(contact.distance) метров, \(contact.course.label)")
-        }
-        if let course = summary.currentCourse { parts.append("Течение: \(course.label), \(summary.currentSpeed) метров в секунду") }
-        else { parts.append("Течения нет") }
-        return parts.joined(separator: ". ")
     }
 }
