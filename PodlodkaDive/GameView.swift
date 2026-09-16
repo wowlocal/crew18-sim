@@ -104,7 +104,7 @@ struct GameView: View {
                     .font(.system(size: size.height < 720 ? 35 : 41, weight: .bold, design: .rounded))
                     .tracking(-1.5).foregroundStyle(OceanPalette.white)
                     .minimumScaleFactor(0.7).lineLimit(1)
-                Text("Найди чёрный ящик. Вернись с добычей.")
+                Text("Аварийная темнота. Найди чёрный ящик и вернись.")
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(OceanPalette.muted)
                     .multilineTextAlignment(.center)
             }
@@ -123,7 +123,7 @@ struct GameView: View {
                 HStack(spacing: 0) {
                     instruction(icon: "arrow.up.and.down.and.arrow.left.and.right", title: "Свободный курс", detail: "Тяни стик в любую сторону")
                     Rectangle().fill(OceanPalette.teal.opacity(0.15)).frame(width: 1, height: 48)
-                    instruction(icon: "dot.radiowaves.left.and.right", title: "Сонар и форсаж", detail: "Ищи. Маневрируй. Исследуй.")
+                    instruction(icon: "flashlight.on.fill", title: "Свет и сонар", detail: "Усиливай фары. Ищи путь.")
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(A11yL10n.text("a11y.welcome.controls", defaultValue: "Управление: свободный курс, сонар и форсаж."))
@@ -315,7 +315,17 @@ struct GameView: View {
                     .accessibilitySortPriority(3)
                 }
                 Spacer(minLength: 0)
-                VStack(spacing: 12) {
+                VStack(spacing: 7) {
+                    LightBoostButton(
+                        detail: engine.isLightBoostActive
+                            ? "Ещё \(Int(ceil(engine.lightBoostRemaining))) с"
+                            : (engine.lightBoostCooldown > 0 ? "Заряд \(Int(ceil(engine.lightBoostCooldown))) с" : "−5 энергии"),
+                        progress: 1 - engine.lightBoostCooldown / GameEngine.lightBoostRecharge,
+                        active: engine.isLightBoostActive,
+                        enabled: engine.canLightBoost,
+                        action: engine.activateLightBoost
+                    )
+                    .accessibilityIdentifier("lightBoost")
                     HStack(spacing: 12) {
                         AbilityButton(icon: "dot.radiowaves.left.and.right", title: "СОНАР",
                                       detail: engine.sonarCooldown > 0 ? "\(Int(ceil(engine.sonarCooldown))) с" : "Поиск",
@@ -794,6 +804,45 @@ private struct AbilityButton: View {
             .accessibilityValue(accessibilityValue)
             .accessibilityHint(accessibilityHint)
             .accessibilitySortPriority(2)
+    }
+}
+
+private struct LightBoostButton: View {
+    let detail: String
+    let progress: Double
+    let active: Bool
+    let enabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: active ? "flashlight.on.fill" : "flashlight.off.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(active ? "УСИЛЕННЫЙ СВЕТ" : "УСИЛИТЬ ФАРЫ")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    Text(detail).font(.system(size: 8))
+                }
+                Spacer(minLength: 2)
+                Circle()
+                    .trim(from: 0, to: min(1, max(0, progress)))
+                    .stroke(OceanPalette.gold.opacity(enabled || active ? 0.9 : 0.35),
+                            style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 14, height: 14)
+            }
+            .foregroundStyle(OceanPalette.gold.opacity(enabled || active ? 1 : 0.45))
+            .padding(.horizontal, 10)
+            .frame(width: 140, height: 39)
+            .background(OceanPalette.ink.opacity(0.88), in: Capsule())
+            .overlay(Capsule().stroke(OceanPalette.gold.opacity(active ? 0.65 : 0.2), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled && !active)
+        .accessibilityLabel("Усилить свет фар")
+        .accessibilityValue(active ? "Активно, \(detail)" : detail)
+        .accessibilityHint("Удваивает дальность и ширину света на четыре секунды")
     }
 }
 

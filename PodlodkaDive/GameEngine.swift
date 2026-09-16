@@ -284,6 +284,8 @@ final class GameEngine: NSObject, ObservableObject {
     private(set) var distance: CGFloat = 0
     private(set) var boostRemaining: TimeInterval = 0
     private(set) var boostCooldown: TimeInterval = 0
+    private(set) var lightBoostRemaining: TimeInterval = 0
+    private(set) var lightBoostCooldown: TimeInterval = 0
     private(set) var sonarRemaining: TimeInterval = 0
     private(set) var sonarCooldown: TimeInterval = 0
     private(set) var invulnerability: TimeInterval = 0
@@ -320,6 +322,9 @@ final class GameEngine: NSObject, ObservableObject {
     static let portalChance = 0.4
     static let bossDuration: TimeInterval = 24
     static let caveSize = CGSize(width: 780, height: 1000)
+    static let lightBoostCost: CGFloat = 5
+    static let lightBoostDuration: TimeInterval = 4
+    static let lightBoostRecharge: TimeInterval = 10
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
@@ -344,6 +349,9 @@ final class GameEngine: NSObject, ObservableObject {
     var targetDistance: Int { Int(hypot(target.x - position.x, target.y - position.y) * 0.16) }
     var isNewRecord: Bool { state == .completed && score > bestAtStart }
     var canBoost: Bool { state == .playing && boostCooldown <= 0 && energy >= Self.boostCost }
+    var canLightBoost: Bool { state == .playing && lightBoostCooldown <= 0 && energy >= Self.lightBoostCost }
+    var isLightBoostActive: Bool { lightBoostRemaining > 0 }
+    var headlightRange: CGFloat { isLightBoostActive ? 520 : 255 }
     var canSonar: Bool { state == .playing && sonarCooldown <= 0 }
     var submarineRotationRadians: Double { Double(atan2(velocity.dy, max(55, abs(velocity.dx)))) * 0.55 }
     var targetClockHour: Int { AccessibilityNavigation.clockHour(from: position, to: target) }
@@ -455,6 +463,8 @@ final class GameEngine: NSObject, ObservableObject {
         distance = 0
         boostRemaining = 0
         boostCooldown = 0
+        lightBoostRemaining = 0
+        lightBoostCooldown = 0
         sonarRemaining = 0
         sonarCooldown = 0
         invulnerability = 0
@@ -553,6 +563,43 @@ final class GameEngine: NSObject, ObservableObject {
         objectWillChange.send()
     }
 
+    func activateLightBoost() {
+        guard canLightBoost else { return }
+        energy -= Self.lightBoostCost
+        lightBoostRemaining = Self.lightBoostDuration
+        lightBoostCooldown = Self.lightBoostRecharge
+        announce("Фары усилены на 4 секунды", duration: 2.5)
+        objectWillChange.send()
+    }
+
+    func reportSurroundings() {
+        announce(surroundingsDescription, duration: 7)
+        objectWillChange.send()
+    }
+
+    var surroundingsDescription: String {
+        var parts = ["Обстановка: цель \(directionDescription(to: target)), \(targetDistance) метров."]
+        let scanRange = max(headlightRange, sonarRemaining > 0 ? 680 : 0)
+        if let mine = mines
+            .filter({ $0.phase != .spent && hypot($0.position.x - position.x, $0.position.y - position.y) <= scanRange })
+            .min(by: { distance(to: $0.position) < distance(to: $1.position) }) {
+            parts.append("Мина \(directionDescription(to: mine.position)), \(Int(distance(to: mine.position) * 0.16)) метров.")
+        }
+        if let pickup = pickups
+            .filter({ !$0.collected && hypot($0.position.x - position.x, $0.position.y - position.y) <= scanRange })
+            .min(by: { distance(to: $0.position) < distance(to: $1.position) }) {
+            let names: [PickupKind: String] = [.battery: "батарея", .shield: "щит", .sample: "образец", .blackBox: "чёрный ящик"]
+            parts.append("\(names[pickup.kind] ?? "Находка") \(directionDescription(to: pickup.position)), \(Int(distance(to: pickup.position) * 0.16)) метров.")
+        }
+        let flow = current(at: position)
+        if hypot(flow.dx, flow.dy) > 5 {
+            let flowPoint = CGPoint(x: position.x + flow.dx, y: position.y + flow.dy)
+            parts.append("Течение несёт \(directionDescription(to: flowPoint)).")
+        }
+        if parts.count == 1 { parts.append("В освещённой зоне препятствий и находок не обнаружено.") }
+        return parts.joined(separator: " ")
+    }
+
     func pause() {
         guard state == .playing else { return }
         steering = .zero
@@ -620,6 +667,8 @@ final class GameEngine: NSObject, ObservableObject {
         let dt = CGFloat(delta)
         runElapsed += delta
         boostCooldown = max(0, boostCooldown - delta)
+        lightBoostCooldown = max(0, lightBoostCooldown - delta)
+        lightBoostRemaining = max(0, lightBoostRemaining - delta)
         sonarCooldown = max(0, sonarCooldown - delta)
         sonarRemaining = max(0, sonarRemaining - delta)
         invulnerability = max(0, invulnerability - delta)
@@ -905,6 +954,17 @@ final class GameEngine: NSObject, ObservableObject {
         }
     }
 
+    private func distance(to point: CGPoint) -> CGFloat {
+        hypot(point.x - position.x, point.y - position.y)
+    }
+
+    private func directionDescription(to point: CGPoint) -> String {
+        let angle = atan2(point.y - position.y, point.x - position.x)
+        let directions = ["справа", "справа снизу", "снизу", "слева снизу", "слева", "слева сверху", "сверху", "справа сверху"]
+        let normalized = (angle + .pi * 2).truncatingRemainder(dividingBy: .pi * 2)
+        return directions[Int((normalized / (.pi / 4)).rounded()) % directions.count]
+    }
+
     private func updateCamera(dt: CGFloat, snap: Bool = false) {
         let look = CGPoint(x: position.x + velocity.dx * 0.65,
                            y: position.y + velocity.dy * 0.45 + 15)
@@ -965,6 +1025,7 @@ final class GameEngine: NSObject, ObservableObject {
         velocity = .zero
         accessibilityMoveRemaining = 0
         boostRemaining = 0
+        lightBoostRemaining = 0
         if success {
             score = cargoValue
             events.send(.success(score))
