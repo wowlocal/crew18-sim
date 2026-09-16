@@ -141,9 +141,57 @@ struct OceanLevel {
     }
 }
 
+enum CompassCourse: Int, CaseIterable, Equatable {
+    case n, ne, e, se, s, sw, w, nw
+    var label: String { ["север", "северо-восток", "восток", "юго-восток", "юг", "юго-запад", "запад", "северо-запад"][rawValue] }
+    var vector: CGVector { steeringVector(for: self) }
+    init(vector: CGVector) {
+        let angle = atan2(vector.dx, -vector.dy)
+        self = Self(rawValue: (Int((angle / (.pi / 4)).rounded()) + 8) % 8)!
+    }
+}
+
+func steeringVector(for course: CompassCourse) -> CGVector {
+    let angle = CGFloat(course.rawValue) * .pi / 4
+    return CGVector(dx: sin(angle), dy: -cos(angle))
+}
+
+struct SituationSummary: Equatable {
+    struct Contact: Equatable {
+        let id: String
+        let name: String
+        let distance: Int
+        let course: CompassCourse
+    }
+    let depth: Int
+    let speed: Int
+    let returning: Bool
+    let targetDistance: Int
+    let targetCourse: CompassCourse
+    let danger: Contact?
+    let find: Contact?
+    let currentCourse: CompassCourse?
+    let currentSpeed: Int
+}
+
+enum GameEvent: Equatable {
+    case speak(String)
+    case energyLow
+    case stateChanged(RunState)
+    case objectiveChanged(Bool)
+    case success(Int)
+    case record(Int)
+    case situation(SituationSummary)
+}
+
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
-    @Published private(set) var state: RunState = .ready
+    let events = PassthroughSubject<GameEvent, Never>()
+    @Published private(set) var state: RunState = .ready {
+        didSet { if oldValue != state { events.send(.stateChanged(state)) } }
+    }
+    private var didWarnEnergy = false
+    private var summaryTicks = 0
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var bestScore: Int
     @Published private(set) var pickupCount = 0
@@ -223,6 +271,8 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func startGame() {
+        didWarnEnergy = false
+        summaryTicks = 0
         position = level.spawn
         velocity = .zero
         steering = .zero
@@ -275,6 +325,7 @@ final class GameEngine: NSObject, ObservableObject {
             ? CGVector(dx: steering.dx / length, dy: steering.dy / length)
             : CGVector(dx: facing, dy: 0)
         energy -= Self.boostCost
+        checkEnergyWarning()
         boostRemaining = 1.1
         boostCooldown = 4.5
         if energy <= 0 { finish(success: false, reason: .energy) }
@@ -376,6 +427,7 @@ final class GameEngine: NSObject, ObservableObject {
         let thrustCost: CGFloat = boosted ? 1.8 : inputStrength * 1.15
         energy = max(0, energy - thrustCost * dt)
 
+        checkEnergyWarning()
         resolveRocks()
         guard state == .playing else { return }
         constrainToOcean()
@@ -393,6 +445,45 @@ final class GameEngine: NSObject, ObservableObject {
         }
         revealNearby(radius: sonarRemaining > 0 ? 680 : 240)
         updateCamera(dt: dt)
+        summaryTicks += 1
+        if state == .playing && summaryTicks % 30 == 0 { events.send(.situation(situationSummary)) }
+    }
+
+    private func checkEnergyWarning() {
+        if energy <= 25 && !didWarnEnergy {
+            didWarnEnergy = true
+            events.send(.energyLow)
+        }
+    }
+
+    var situationSummary: SituationSummary {
+        func contact(_ id: String, _ name: String, _ point: CGPoint) -> SituationSummary.Contact {
+            let delta = CGVector(dx: point.x - position.x, dy: point.y - position.y)
+            return .init(id: id, name: name, distance: Int(hypot(delta.dx, delta.dy) * 0.16), course: CompassCourse(vector: delta))
+        }
+        var dangers = mines.filter { $0.phase != .spent }.map { contact("mine:\($0.id)", "Мина", $0.position) }
+        // Closest point on each reef edge, rather than its centre, describes the obstacle ahead.
+        for rock in level.rocks {
+            var points: [CGPoint] = []
+            for i in rock.vertices.indices {
+                let a = rock.vertices[i], b = rock.vertices[(i + 1) % rock.vertices.count]
+                let dx = b.x - a.x, dy = b.y - a.y
+                let t = min(1, max(0, ((position.x - a.x) * dx + (position.y - a.y) * dy) / max(0.001, dx * dx + dy * dy)))
+                points.append(CGPoint(x: a.x + t * dx, y: a.y + t * dy))
+            }
+            if let point = points.min(by: { hypot($0.x - position.x, $0.y - position.y) < hypot($1.x - position.x, $1.y - position.y) }) {
+                dangers.append(contact("rock:\(rock.id)", "Риф", point))
+            }
+        }
+        let finds = pickups.filter { !$0.collected && revealedPickups.contains($0.id) }.map {
+            contact("pickup:\($0.id)", [PickupKind.battery: "Батарея", .shield: "Щит", .sample: "Образец", .blackBox: "Чёрный ящик"][$0.kind]!, $0.position)
+        }
+        let flow = current(at: position)
+        return SituationSummary(depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
+            targetDistance: targetDistance, targetCourse: CompassCourse(vector: CGVector(dx: target.x - position.x, dy: target.y - position.y)),
+            danger: dangers.min { $0.distance < $1.distance }, find: finds.min { $0.distance < $1.distance },
+            currentCourse: hypot(flow.dx, flow.dy) > 0.1 ? CompassCourse(vector: flow) : nil,
+            currentSpeed: Int(hypot(flow.dx, flow.dy) * 0.16))
     }
 
     private func resolveRocks() {
@@ -484,6 +575,7 @@ final class GameEngine: NSObject, ObservableObject {
                 announce("Образец на борту · +75 к добыче")
             case .blackBox:
                 hasBlackBox = true
+                events.send(.objectiveChanged(true))
                 announce("Чёрный ящик найден. Вернись на базу!", duration: 6)
             }
         }
@@ -508,22 +600,27 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func announce(_ text: String, duration: TimeInterval = 3) {
+        events.send(.speak(text))
         notice = text
         noticeRemaining = duration
     }
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
+        guard state == .playing else { return }
         steering = .zero
         velocity = .zero
         boostRemaining = 0
         if success {
             score = cargoValue
+            events.send(.success(score))
             if score > bestScore {
+                events.send(.record(score))
                 bestScore = score
                 defaults.set(score, forKey: Self.bestKey)
             }
             state = .completed
         } else {
+            if reason == .energy { events.send(.speak("Энергия закончилась")) }
             failureReason = reason
             score = 0
             state = .gameOver
@@ -968,17 +1065,20 @@ struct GameCanvas: View {
 
 struct ContentView: View {
     @StateObject private var engine: GameEngine
+    @StateObject private var announcer: VoiceOverAnnouncer
+    @AccessibilityFocusState private var focusedControl: String?
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingMap = false
 
     init(engine: GameEngine = GameEngine()) {
         _engine = StateObject(wrappedValue: engine)
+        _announcer = StateObject(wrappedValue: VoiceOverAnnouncer(engine: engine))
     }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                GameCanvas(engine: engine)
+                GameCanvas(engine: engine).accessibilityHidden(true)
                 if engine.state == .ready {
                     welcome(size: proxy.size, insets: proxy.safeAreaInsets)
                 } else {
@@ -1011,6 +1111,19 @@ struct ContentView: View {
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.success, trigger: engine.state == .completed)
         .preferredColorScheme(.dark)
+        .task(id: "\(engine.state)-\(showingMap)") {
+            let destination: String?
+            switch engine.state {
+            case .ready: destination = "startDive"
+            case .playing: destination = "steeringPad"
+            case .paused: destination = showingMap ? "closeMap" : "resumeDive"
+            case .completed, .gameOver: destination = "retryDive"
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, UIAccessibility.isVoiceOverRunning else { return }
+            UIAccessibility.post(notification: .screenChanged, argument: nil)
+            focusedControl = destination
+        }
     }
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
@@ -1061,7 +1174,7 @@ struct ContentView: View {
                 } label: {
                     HStack { Spacer(); Text("Начать экспедицию"); Spacer(); Image(systemName: "arrow.right") }
                 }
-                .buttonStyle(DiveButtonStyle()).accessibilityIdentifier("startDive")
+                .buttonStyle(DiveButtonStyle()).accessibilityIdentifier("startDive").accessibilityFocused($focusedControl, equals: "startDive")
                 Text("Береги корпус и заряд на обратный путь")
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(OceanPalette.muted)
             }
@@ -1180,7 +1293,8 @@ struct ContentView: View {
                     .padding(.horizontal, 16).allowsHitTesting(false)
             }
             HStack(alignment: .center, spacing: 0) {
-                SteeringPad(onInput: engine.setSteering)
+                SteeringPad(onInput: engine.setSteering, onSummary: { announcer.describeSurroundings() })
+                    .accessibilityFocused($focusedControl, equals: "steeringPad")
                     .frame(width: 174, height: 158)
                 Spacer(minLength: 0)
                 VStack(spacing: 12) {
@@ -1239,7 +1353,9 @@ struct ContentView: View {
                 Spacer()
                 Text("ПАУЗА").font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(OceanPalette.muted)
             }
-            ExpeditionMap(engine: engine).frame(height: min(395, height * 0.49))
+            ExpeditionMap(engine: engine)
+                .accessibilityValue(VoiceOverAnnouncer.format(engine.situationSummary))
+                .frame(height: min(395, height * 0.49))
                 .background(OceanPalette.ink.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
             VStack(spacing: 9) {
                 HStack(spacing: 13) {
@@ -1261,7 +1377,7 @@ struct ContentView: View {
                 engine.togglePause()
             } label: {
                 HStack { Spacer(); Text("Вернуться в океан"); Spacer(); Image(systemName: "arrow.right") }
-            }.buttonStyle(DiveButtonStyle()).accessibilityIdentifier("closeMap")
+            }.buttonStyle(DiveButtonStyle()).accessibilityIdentifier("closeMap").accessibilityFocused($focusedControl, equals: "closeMap")
         }
         .padding(22).frame(maxWidth: 380)
         .background(Color(red: 0.035, green: 0.15, blue: 0.20), in: RoundedRectangle(cornerRadius: 27))
@@ -1303,6 +1419,7 @@ struct ContentView: View {
                 } label: {
                     HStack { Spacer(); Text(paused ? "Продолжить" : "Новая экспедиция"); Spacer(); Image(systemName: paused ? "play.fill" : "arrow.clockwise") }
                 }.buttonStyle(DiveButtonStyle()).accessibilityIdentifier(paused ? "resumeDive" : "retryDive")
+                    .accessibilityFocused($focusedControl, equals: paused ? "resumeDive" : "retryDive")
                 if paused {
                     Button("Открыть карту") { showingMap = true }
                         .font(.system(size: 13, weight: .medium)).foregroundStyle(OceanPalette.teal).frame(minHeight: 35)
@@ -1331,19 +1448,23 @@ struct ContentView: View {
 /// other thumb presses an ability, and handles cancellation explicitly.
 private struct SteeringPad: UIViewRepresentable {
     let onInput: (CGVector) -> Void
+    let onSummary: () -> Void
 
     func makeUIView(context: Context) -> SteeringSurface {
         let view = SteeringSurface()
+        view.onSummary = onSummary
         view.onInput = onInput
         return view
     }
 
-    func updateUIView(_ view: SteeringSurface, context: Context) { view.onInput = onInput }
+    func updateUIView(_ view: SteeringSurface, context: Context) { view.onInput = onInput; view.onSummary = onSummary }
     static func dismantleUIView(_ view: SteeringSurface, coordinator: ()) { view.releaseInput() }
 }
 
 private final class SteeringSurface: UIView {
     var onInput: ((CGVector) -> Void)?
+    var onSummary: (() -> Void)?
+    private var course: CompassCourse = .n
     private var finger: UITouch?
     private var origin: CGPoint?
     private var knob = CGVector.zero
@@ -1353,9 +1474,27 @@ private final class SteeringSurface: UIView {
         backgroundColor = .clear
         isMultipleTouchEnabled = true
         isAccessibilityElement = true
-        accessibilityLabel = "Руль подлодки. Тяни в нужном направлении. Отпусти, чтобы остановиться."
+        accessibilityLabel = "Руль подлодки"
+        accessibilityTraits = [.adjustable]
+        accessibilityValue = course.label
+        accessibilityHint = "Смахивайте вверх или вниз для выбора курса. В действиях выберите Плыть, Стоп или Что вокруг? При смене курса лодка идёт по старому вектору до повторного Плыть. Стоп отключает тягу; течение может сносить лодку."
+        accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: "Плыть", target: self, selector: #selector(sail)),
+            UIAccessibilityCustomAction(name: "Стоп", target: self, selector: #selector(stop)),
+            UIAccessibilityCustomAction(name: "Что вокруг?", target: self, selector: #selector(describeWorld))
+        ]
         accessibilityIdentifier = "steeringPad"
     }
+
+    override func accessibilityIncrement() { changeCourse(1) }
+    override func accessibilityDecrement() { changeCourse(-1) }
+    private func changeCourse(_ offset: Int) {
+        course = CompassCourse(rawValue: (course.rawValue + offset + 8) % 8)!
+        accessibilityValue = course.label
+    }
+    @objc private func sail() -> Bool { onInput?(course.vector); return true }
+    @objc private func stop() -> Bool { onInput?(.zero); return true }
+    @objc private func describeWorld() -> Bool { onSummary?(); return true }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -1496,5 +1635,126 @@ private struct DiveButtonStyle: ButtonStyle {
             .shadow(color: OceanPalette.gold.opacity(0.1), radius: 16, y: 4)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
+/// UIKit speech is isolated here; simulation never depends on VoiceOver or wall time.
+@MainActor
+final class VoiceOverAnnouncer: ObservableObject {
+    private struct Message {
+        let key: String
+        let text: String
+        let priority: Int // danger 2 > event 1 > beacon 0
+    }
+    private var subscriptions = Set<AnyCancellable>()
+    private var enabled = UIAccessibility.isVoiceOverRunning
+    private var seen: [String: (text: String, time: TimeInterval)] = [:]
+    private var pending: [Message] = []
+    private var delivery: Task<Void, Never>?
+    private var latest: SituationSummary?
+    private var beacon: SituationSummary?
+    private var lastBeacon = -Double.infinity
+    private var lastDanger = -Double.infinity
+    private weak var engine: GameEngine?
+
+    init(engine: GameEngine) {
+        self.engine = engine
+        engine.events.sink { [weak self] event in self?.receive(event) }.store(in: &subscriptions)
+        NotificationCenter.default.publisher(for: UIAccessibility.voiceOverStatusDidChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                enabled = UIAccessibility.isVoiceOverRunning
+                delivery?.cancel(); delivery = nil; pending.removeAll(); seen.removeAll()
+                beacon = nil; lastBeacon = -.infinity; lastDanger = -.infinity
+            }.store(in: &subscriptions)
+    }
+
+    private func receive(_ event: GameEvent) {
+        if case .situation(let summary) = event { latest = summary }
+        guard enabled else { return }
+        switch event {
+        case .speak(let text):
+            let danger = text.hasPrefix("Мина") || text.hasPrefix("Корпус") || text.hasPrefix("Щит поглотил") || text == "Энергия закончилась"
+            enqueue(key: "speech:\(text.components(separatedBy: " ").first ?? text)", text: text, priority: danger ? 2 : 1)
+        case .energyLow: enqueue(key: "energy", text: "Энергия ниже 25 процентов. Ищи батарею или возвращайся", priority: 2)
+        case .objectiveChanged(let returning):
+            enqueue(key: "objective", text: returning ? "Новая цель: база" : "Новая цель: чёрный ящик", priority: 1)
+        case .success(let score): enqueue(key: "success", text: "Груз доставлен: \(score)", priority: 1)
+        case .record(let score): enqueue(key: "record", text: "Новый рекорд: \(score)", priority: 1)
+        case .stateChanged(let state):
+            seen.removeAll()
+            if state != .playing { pending.removeAll { $0.priority == 0 } }
+            if state == .playing && engine?.runElapsed == 0 {
+                beacon = nil; latest = nil; lastBeacon = -.infinity
+            }
+            let text: String
+            switch state {
+            case .ready: text = "Главное меню"
+            case .playing: text = "Экспедиция продолжается"
+            case .paused: text = "Пауза"
+            case .completed: text = "Экспедиция завершена"
+            case .gameOver: text = "Экспедиция потеряна"
+            }
+            enqueue(key: "state", text: text, priority: 1)
+        case .situation(let summary):
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastBeacon >= 5, now - lastDanger >= 2 else { return }
+            if let old = beacon {
+                guard abs(old.targetDistance - summary.targetDistance) >= 20 || old.targetCourse != summary.targetCourse ||
+                        old.returning != summary.returning || old.danger?.id != summary.danger?.id || old.find?.id != summary.find?.id ||
+                        old.currentCourse != summary.currentCourse else { return }
+            }
+            beacon = summary; lastBeacon = now
+            enqueue(key: "beacon", text: Self.format(summary), priority: 0)
+        }
+    }
+
+    func describeSurroundings() {
+        guard enabled, let engine, engine.state == .playing else { return }
+        let summary = latest ?? engine.situationSummary
+        // Explicit requests bypass repeat suppression and the automatic beacon timer.
+        UIAccessibility.post(notification: .announcement, argument: Self.format(summary))
+    }
+
+    private func enqueue(key: String, text: String, priority: Int) {
+        guard seen[key]?.text != text else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        seen[key] = (text, now)
+        if priority == 2 {
+            lastDanger = now
+            pending.removeAll { $0.priority == 0 }
+            delivery?.cancel(); delivery = nil
+        }
+        pending.removeAll { $0.key == key }
+        pending.append(Message(key: key, text: text, priority: priority))
+        drain()
+    }
+
+    private func drain() {
+        guard delivery == nil, !pending.isEmpty, enabled else { return }
+        let priority = pending.map(\.priority).max()!
+        let index = pending.firstIndex { $0.priority == priority }!
+        let message = pending.remove(at: index)
+        let speech = NSMutableAttributedString(string: message.text)
+        speech.addAttribute(.accessibilitySpeechQueueAnnouncement, value: message.priority < 2, range: NSRange(location: 0, length: speech.length))
+        UIAccessibility.post(notification: .announcement, argument: speech)
+        delivery = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            guard let self else { return }
+            delivery = nil
+            drain()
+        }
+    }
+
+    static func format(_ summary: SituationSummary) -> String {
+        var parts = ["Глубина \(summary.depth) метров, скорость \(summary.speed) метров в секунду",
+                     "\(summary.returning ? "База" : "Ящик"): \(summary.targetDistance) метров, \(summary.targetCourse.label)"]
+        for contact in [summary.danger, summary.find].compactMap({ $0 }) {
+            parts.append("\(contact.name): \(contact.distance) метров, \(contact.course.label)")
+        }
+        if let course = summary.currentCourse { parts.append("Течение: \(course.label), \(summary.currentSpeed) метров в секунду") }
+        else { parts.append("Течения нет") }
+        return parts.joined(separator: ". ")
     }
 }
