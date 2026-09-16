@@ -18,6 +18,9 @@
 		A10000000000000000000008 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* Localizable.xcstrings */; };
 		A10000000000000000000009 /* AccessibilityAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* AccessibilityAuditTests.swift */; };
 		A1000000000000000000000A /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* XCTest.framework */; };
+		E10000000000000000000001 = {isa = PBXBuildFile; fileRef = E20000000000000000000001; };
+		E10000000000000000000002 = {isa = PBXBuildFile; fileRef = E20000000000000000000002; };
+E10000000000000000000003 = {isa = PBXBuildFile; fileRef = E20000000000000000000003; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,6 +54,9 @@
 		A2000000000000000000000A /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		A2000000000000000000000B /* AccessibilityAuditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityAuditTests.swift; sourceTree = "<group>"; };
 		A2000000000000000000000C /* PodlodkaDiveUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PodlodkaDiveUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E20000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionLog.swift; sourceTree = "<group>"; };
+		E20000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionJournalView.swift; sourceTree = "<group>"; };
+E20000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionLogTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -95,6 +101,8 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000001 /* PodlodkaDiveApp.swift */,
+                E20000000000000000000002,
+                E20000000000000000000001,
 				A20000000000000000000002 /* GameView.swift */,
 				D20000000000000000000001 /* VoiceOverAnnouncer.swift */,
 				A20000000000000000000003 /* GameEngine.swift */,
@@ -109,6 +117,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000006 /* GameEngineTests.swift */,
+E20000000000000000000003,
 			);
 			path = PodlodkaDiveTests;
 			sourceTree = "<group>";
@@ -271,6 +280,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* PodlodkaDiveApp.swift in Sources */,
+                E10000000000000000000002,
+                E10000000000000000000001,
 				A10000000000000000000002 /* GameView.swift in Sources */,
 				D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */,
 				A10000000000000000000003 /* GameEngine.swift in Sources */,
@@ -283,6 +294,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000006 /* GameEngineTests.swift in Sources */,
+E10000000000000000000003,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

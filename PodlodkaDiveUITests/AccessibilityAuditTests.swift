@@ -51,3 +51,32 @@ final class AccessibilityAuditTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Гараж"].waitForExistence(timeout: 5))
     }
 }
+
+final class ExpeditionJournalUITests: XCTestCase {
+    @MainActor
+    func testJournalReplaySeekAndGraphs() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-accessibilityAuditState", "journal"]
+        app.launch()
+        XCTAssertTrue(app.buttons["openJournal"].waitForExistence(timeout: 10))
+        app.buttons["openJournal"].tap()
+        XCTAssertTrue(app.buttons["expeditionRow"].firstMatch.waitForExistence(timeout: 10))
+        app.buttons["expeditionRow"].firstMatch.tap()
+        app.buttons["replay"].tap()
+        XCTAssertTrue(app.sliders["replayTimeline"].waitForExistence(timeout: 10))
+        app.sliders["replayTimeline"].adjust(toNormalizedSliderPosition: 0.5)
+        XCTAssertTrue(app.staticTexts["replayTime"].exists)
+        XCTAssertTrue(app.buttons["replayHighlight"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["replayHighlight"].firstMatch.tap()
+        app.buttons["replayPlay"].tap()
+        XCTAssertTrue(app.buttons["Пауза"].exists)
+        app.buttons["replayPlay"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["runFlow"].tap()
+        XCTAssertTrue(app.staticTexts["Welcome → Game: 1"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["allFlows"].tap()
+        XCTAssertTrue(app.staticTexts["Все экспедиции"].waitForExistence(timeout: 5))
+    }
+}
