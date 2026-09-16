@@ -320,7 +320,7 @@ struct GameCanvas: View {
 
     private func drawPickup(_ pickup: OceanPickup, in context: inout GraphicsContext) {
         let p = CGPoint(x: pickup.position.x, y: pickup.position.y + CGFloat(sin(time * 1.8 + Double(pickup.id))) * 3)
-        let color: Color = pickup.kind == .shield ? OceanPalette.blue : (pickup.kind == .battery ? OceanPalette.teal : OceanPalette.gold)
+        let color: Color = pickup.kind == .crystal ? .cyan : pickup.kind == .shield ? OceanPalette.blue : (pickup.kind == .battery ? OceanPalette.teal : OceanPalette.gold)
         context.fill(Path(ellipseIn: CGRect(x: p.x - 32, y: p.y - 32, width: 64, height: 64)),
                      with: .radialGradient(Gradient(colors: [color.opacity(0.17), .clear]), center: p, startRadius: 2, endRadius: 32))
         switch pickup.kind {
@@ -339,7 +339,7 @@ struct GameCanvas: View {
             shield.closeSubpath()
             context.fill(shield, with: .color(color.opacity(0.15)))
             context.stroke(shield, with: .color(color), lineWidth: 1.5)
-        case .sample:
+        case .sample, .crystal:
             var crystal = Path()
             crystal.addLines([CGPoint(x: p.x, y: p.y - 12), CGPoint(x: p.x + 9, y: p.y), CGPoint(x: p.x, y: p.y + 12), CGPoint(x: p.x - 9, y: p.y)])
             crystal.closeSubpath()
@@ -353,7 +353,7 @@ struct GameCanvas: View {
             context.fill(Path(CGRect(x: p.x + 9, y: p.y - 10, width: 4, height: 20)), with: .color(color))
             context.fill(Path(ellipseIn: CGRect(x: p.x - 2, y: p.y - 2, width: 4, height: 4)), with: .color(OceanPalette.teal))
         }
-        let labels: [PickupKind: String] = [.battery: "+30 ЭНЕРГИИ", .shield: "ЩИТ", .sample: "ОБРАЗЕЦ · 75", .blackBox: "ЧЁРНЫЙ ЯЩИК"]
+        let labels: [PickupKind: String] = [.crystal: "+10 КРИСТАЛЛОВ", .battery: "+30 ЭНЕРГИИ", .shield: "ЩИТ", .sample: "ОБРАЗЕЦ · 75", .blackBox: "ЧЁРНЫЙ ЯЩИК"]
         if hypot(engine.position.x - p.x, engine.position.y - p.y) < 200 || pickup.kind == .blackBox {
             drawText(labels[pickup.kind] ?? "", at: CGPoint(x: p.x, y: p.y + 31), color: color, in: &context)
         }
@@ -510,6 +510,13 @@ struct GameCanvas: View {
                 startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: beamLength, y: 0)))
             }
 
+            let style = engine.selectedStyle
+            let paint: Color = switch style {
+            case .classic: OceanPalette.gold
+            case .neon: .purple
+            case .flames: .red
+            case .chrome: .gray
+            }
             let darkGold = Color(red: 0.63, green: 0.34, blue: 0.12)
             var fin = Path()
             fin.move(to: CGPoint(x: -23, y: -8))
@@ -533,9 +540,28 @@ struct GameCanvas: View {
             layer.stroke(scope, with: .color(OceanPalette.gold), style: StrokeStyle(lineWidth: 4, lineCap: .round))
             layer.fill(Path(roundedRect: CGRect(x: 7, y: -43, width: 5, height: 6), cornerRadius: 1.5), with: .color(OceanPalette.ink))
             let hull = Path(roundedRect: CGRect(x: -34, y: -18, width: 72, height: 37), cornerRadius: 18.5)
-            layer.fill(hull, with: .linearGradient(Gradient(colors: [Color(red: 1, green: 0.88, blue: 0.53), OceanPalette.gold, Color(red: 0.87, green: 0.49, blue: 0.16)]),
+            layer.fill(hull, with: .linearGradient(Gradient(colors: [paint.opacity(0.6), paint, paint.opacity(0.8)]),
                 startPoint: CGPoint(x: 0, y: -18), endPoint: CGPoint(x: 0, y: 21)))
             layer.stroke(hull, with: .color(Color(red: 1, green: 0.88, blue: 0.59).opacity(0.65)), lineWidth: 0.8)
+            if style == .neon {
+                layer.stroke(hull, with: .color(OceanPalette.teal), lineWidth: 3)
+                layer.fill(Path(roundedRect: CGRect(x: -25, y: 22, width: 50, height: 4), cornerRadius: 2), with: .color(OceanPalette.teal))
+            } else if style == .flames {
+                var flames = Path()
+                flames.move(to: CGPoint(x: -30, y: 12))
+                for x in stride(from: -25, through: 20, by: 15) {
+                    flames.addLine(to: CGPoint(x: x + 12, y: -13))
+                    flames.addLine(to: CGPoint(x: x + 6, y: 12))
+                }
+                flames.closeSubpath()
+                layer.fill(flames, with: .color(OceanPalette.gold))
+            } else if style == .chrome {
+                for x: CGFloat in [-24, 14] {
+                    let speaker = Path(roundedRect: CGRect(x: x, y: -36, width: 16, height: 19), cornerRadius: 3)
+                    layer.fill(speaker, with: .color(OceanPalette.ink))
+                    layer.stroke(Path(ellipseIn: CGRect(x: x + 3, y: -32, width: 10, height: 10)), with: .color(.white), lineWidth: 2)
+                }
+            }
             let shine = Path(roundedRect: CGRect(x: -23, y: -14, width: 39, height: 3), cornerRadius: 1.5)
             layer.fill(shine, with: .color(.white.opacity(0.38)))
             for x: CGFloat in [-13, 11] {

@@ -9,7 +9,7 @@ import UIKit
 
 enum RunState: Equatable { case ready, playing, paused, gameOver, completed }
 enum FailureReason { case hull, energy }
-enum PickupKind: String { case battery, shield, sample, blackBox }
+enum PickupKind: String { case battery, shield, sample, blackBox, crystal }
 enum MinePhase { case idle, armed, exploding, spent }
 enum DiveZone: Equatable { case ocean, bossCave }
 enum BossStrikePhase { case warning, impact }
@@ -25,7 +25,7 @@ struct BossStrike {
 }
 
 enum AccessibilityContactKind: String, CaseIterable {
-    case target, base, mine, reef, battery, shield, sample
+    case target, base, mine, reef, battery, shield, sample, crystal
 }
 
 struct AccessibilityContact: Identifiable, Equatable {
@@ -67,6 +67,7 @@ enum A11yL10n {
         case .battery: text("a11y.contact.battery", defaultValue: "Батарея")
         case .shield: text("a11y.contact.shield", defaultValue: "Щит")
         case .sample: text("a11y.contact.sample", defaultValue: "Образец")
+        case .crystal: text("a11y.contact.crystal", defaultValue: "Кристалл")
         }
     }
 
@@ -74,6 +75,37 @@ enum A11yL10n {
         format("a11y.contact.format", defaultValue: "%@, %lld метров, на %lld часов",
                contactKind(contact.kind), Int64(contact.distanceMeters), Int64(contact.clockHour))
     }
+}
+
+enum SubmarineStyle: String, CaseIterable, Codable, Identifiable {
+    case classic, neon, flames, chrome
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .classic: return "Классика"
+        case .neon: return "Неоновая глубина"
+        case .flames: return "Огненный рейс"
+        case .chrome: return "Хром и бас"
+        }
+    }
+    var price: Int {
+        switch self { case .classic: return 0; case .neon: return 20; case .flames: return 40; case .chrome: return 60 }
+    }
+    var description: String {
+        switch self {
+        case .classic: return "Золотистый корпус с круглыми иллюминаторами."
+        case .neon: return "Фиолетовый корпус, бирюзовая неоновая окантовка и подсветка днища."
+        case .flames: return "Красный корпус с золотыми языками пламени вдоль борта."
+        case .chrome: return "Серебристый хромированный корпус и две большие колонки на крыше."
+        }
+    }
+}
+
+/// A single saved value keeps the wallet, purchases and selection together.
+private struct GarageSave: Codable {
+    var crystals = 0
+    var unlocked: Set<SubmarineStyle> = [.classic]
+    var selected: SubmarineStyle = .classic
 }
 
 struct OceanPickup: Identifiable {
@@ -188,7 +220,9 @@ struct OceanLevel {
                 pickup(7, .sample, 390, 320), pickup(8, .sample, 740, 830),
                 pickup(9, .sample, 1220, 1080), pickup(10, .sample, 465, 1370),
                 pickup(11, .sample, 820, 1770), pickup(12, .sample, 1350, 1660),
-                pickup(13, .sample, 190, 2250), pickup(14, .sample, 900, 2450)
+                pickup(13, .sample, 190, 2250), pickup(14, .sample, 900, 2450),
+                pickup(15, .crystal, 320, 320), pickup(16, .crystal, 740, 900),
+                pickup(17, .crystal, 440, 1700), pickup(18, .crystal, 1350, 1740)
             ],
             mines: [
                 OceanMine(id: 0, position: CGPoint(x: 820, y: 700)),
@@ -270,6 +304,11 @@ final class GameEngine: NSObject, ObservableObject {
     @Published private(set) var eventCount = 0
     @Published private(set) var announcementCount = 0
 
+    @Published private var garage: GarageSave
+    private static let garageKey = "podlodkaDive.garage.v1"
+    var crystals: Int { garage.crystals }
+    var selectedStyle: SubmarineStyle { garage.selected }
+
     let level: OceanLevel
     private(set) var viewport = CGSize(width: 390, height: 844)
     private(set) var position: CGPoint
@@ -333,6 +372,12 @@ final class GameEngine: NSObject, ObservableObject {
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
+        var saved = defaults.data(forKey: Self.garageKey)
+            .flatMap { try? JSONDecoder().decode(GarageSave.self, from: $0) } ?? GarageSave()
+        saved.crystals = max(0, saved.crystals)
+        saved.unlocked.insert(.classic)
+        if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
+        garage = saved
         self.defaults = defaults
         self.level = level
         self.randomValue = randomValue
@@ -385,6 +430,7 @@ final class GameEngine: NSObject, ObservableObject {
             case .battery: .battery
             case .shield: .shield
             case .sample: .sample
+            case .crystal: .crystal
             case .blackBox: .target
             }
             return contact(id: "pickup-\(pickup.id)", kind: kind, point: pickup.position)
@@ -436,6 +482,27 @@ final class GameEngine: NSObject, ObservableObject {
             parts.append("Ближайшая мина \(directionAndDistance(to: mine.position)).")
         }
         return parts.joined(separator: " ")
+    }
+
+    func owns(_ style: SubmarineStyle) -> Bool { garage.unlocked.contains(style) }
+
+    /// Purchases and equipment changes are allowed only before an expedition.
+    @discardableResult
+    func customize(_ style: SubmarineStyle) -> String {
+        guard state == .ready else { return "Открой гараж перед началом экспедиции." }
+        let purchased = !owns(style)
+        if purchased {
+            guard crystals >= style.price else { return "Не хватает кристаллов: нужно ещё \(style.price - crystals)." }
+            garage.crystals -= style.price
+            garage.unlocked.insert(style)
+        }
+        garage.selected = style
+        saveGarage()
+        return "\(purchased ? "Куплено и установлено" : "Установлено"): \(style.title). Баланс: \(crystals) кристаллов."
+    }
+
+    private func saveGarage() {
+        if let data = try? JSONEncoder().encode(garage) { defaults.set(data, forKey: Self.garageKey) }
     }
 
     func resize(to size: CGSize) {
@@ -592,7 +659,7 @@ final class GameEngine: NSObject, ObservableObject {
         if let pickup = pickups
             .filter({ !$0.collected && hypot($0.position.x - position.x, $0.position.y - position.y) <= scanRange })
             .min(by: { distance(to: $0.position) < distance(to: $1.position) }) {
-            let names: [PickupKind: String] = [.battery: "батарея", .shield: "щит", .sample: "образец", .blackBox: "чёрный ящик"]
+            let names: [PickupKind: String] = [.battery: "батарея", .shield: "щит", .sample: "образец", .blackBox: "чёрный ящик", .crystal: "кристалл"]
             parts.append("\(names[pickup.kind] ?? "Находка") \(directionDescription(to: pickup.position)), \(Int(distance(to: pickup.position) * 0.16)) метров.")
         }
         let flow = current(at: position)
@@ -759,7 +826,7 @@ final class GameEngine: NSObject, ObservableObject {
             }
         }
         let finds = pickups.filter { !$0.collected && revealedPickups.contains($0.id) }.map {
-            contact("pickup:\($0.id)", [PickupKind.battery: "Батарея", .shield: "Щит", .sample: "Образец", .blackBox: "Чёрный ящик"][$0.kind]!, $0.position)
+            contact("pickup:\($0.id)", [PickupKind.battery: "Батарея", .shield: "Щит", .sample: "Образец", .blackBox: "Чёрный ящик", .crystal: "Кристалл"][$0.kind]!, $0.position)
         }
         let flow = current(at: position)
         return SituationSummary(depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
@@ -935,6 +1002,10 @@ final class GameEngine: NSObject, ObservableObject {
             pickups[index].collected = true
             pickupCount += 1
             switch pickup.kind {
+            case .crystal:
+                garage.crystals += 10
+                saveGarage()
+                announce("Кристаллы · +10. Баланс: \(crystals)")
             case .battery:
                 energy = min(100, energy + 30)
                 announce(A11yL10n.text("event.battery", defaultValue: "Батарея. Плюс 30 энергии"))
@@ -1385,7 +1456,7 @@ struct GameCanvas: View {
 
     private func drawPickup(_ pickup: OceanPickup, in context: inout GraphicsContext) {
         let p = CGPoint(x: pickup.position.x, y: pickup.position.y + CGFloat(sin(time * 1.8 + Double(pickup.id))) * 3)
-        let color: Color = pickup.kind == .shield ? OceanPalette.blue : (pickup.kind == .battery ? OceanPalette.teal : OceanPalette.gold)
+        let color: Color = pickup.kind == .crystal ? .cyan : pickup.kind == .shield ? OceanPalette.blue : (pickup.kind == .battery ? OceanPalette.teal : OceanPalette.gold)
         context.fill(Path(ellipseIn: CGRect(x: p.x - 32, y: p.y - 32, width: 64, height: 64)),
                      with: .radialGradient(Gradient(colors: [color.opacity(0.17), .clear]), center: p, startRadius: 2, endRadius: 32))
         switch pickup.kind {
@@ -1404,7 +1475,7 @@ struct GameCanvas: View {
             shield.closeSubpath()
             context.fill(shield, with: .color(color.opacity(0.15)))
             context.stroke(shield, with: .color(color), lineWidth: 1.5)
-        case .sample:
+        case .sample, .crystal:
             var crystal = Path()
             crystal.addLines([CGPoint(x: p.x, y: p.y - 12), CGPoint(x: p.x + 9, y: p.y), CGPoint(x: p.x, y: p.y + 12), CGPoint(x: p.x - 9, y: p.y)])
             crystal.closeSubpath()
@@ -1418,7 +1489,7 @@ struct GameCanvas: View {
             context.fill(Path(CGRect(x: p.x + 9, y: p.y - 10, width: 4, height: 20)), with: .color(color))
             context.fill(Path(ellipseIn: CGRect(x: p.x - 2, y: p.y - 2, width: 4, height: 4)), with: .color(OceanPalette.teal))
         }
-        let labels: [PickupKind: String] = [.battery: "+30 ЭНЕРГИИ", .shield: "ЩИТ", .sample: "ОБРАЗЕЦ · 75", .blackBox: "ЧЁРНЫЙ ЯЩИК"]
+        let labels: [PickupKind: String] = [.crystal: "+10 КРИСТАЛЛОВ", .battery: "+30 ЭНЕРГИИ", .shield: "ЩИТ", .sample: "ОБРАЗЕЦ · 75", .blackBox: "ЧЁРНЫЙ ЯЩИК"]
         if hypot(engine.position.x - p.x, engine.position.y - p.y) < 200 || pickup.kind == .blackBox {
             drawText(labels[pickup.kind] ?? "", at: CGPoint(x: p.x, y: p.y + 31), color: color, in: &context)
         }
@@ -1575,6 +1646,13 @@ struct GameCanvas: View {
                 startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: beamLength, y: 0)))
             }
 
+            let style = engine.selectedStyle
+            let paint: Color = switch style {
+            case .classic: OceanPalette.gold
+            case .neon: .purple
+            case .flames: .red
+            case .chrome: .gray
+            }
             let darkGold = Color(red: 0.63, green: 0.34, blue: 0.12)
             var fin = Path()
             fin.move(to: CGPoint(x: -23, y: -8))
@@ -1598,9 +1676,28 @@ struct GameCanvas: View {
             layer.stroke(scope, with: .color(OceanPalette.gold), style: StrokeStyle(lineWidth: 4, lineCap: .round))
             layer.fill(Path(roundedRect: CGRect(x: 7, y: -43, width: 5, height: 6), cornerRadius: 1.5), with: .color(OceanPalette.ink))
             let hull = Path(roundedRect: CGRect(x: -34, y: -18, width: 72, height: 37), cornerRadius: 18.5)
-            layer.fill(hull, with: .linearGradient(Gradient(colors: [Color(red: 1, green: 0.88, blue: 0.53), OceanPalette.gold, Color(red: 0.87, green: 0.49, blue: 0.16)]),
+            layer.fill(hull, with: .linearGradient(Gradient(colors: [paint.opacity(0.6), paint, paint.opacity(0.8)]),
                 startPoint: CGPoint(x: 0, y: -18), endPoint: CGPoint(x: 0, y: 21)))
             layer.stroke(hull, with: .color(Color(red: 1, green: 0.88, blue: 0.59).opacity(0.65)), lineWidth: 0.8)
+            if style == .neon {
+                layer.stroke(hull, with: .color(OceanPalette.teal), lineWidth: 3)
+                layer.fill(Path(roundedRect: CGRect(x: -25, y: 22, width: 50, height: 4), cornerRadius: 2), with: .color(OceanPalette.teal))
+            } else if style == .flames {
+                var flames = Path()
+                flames.move(to: CGPoint(x: -30, y: 12))
+                for x in stride(from: -25, through: 20, by: 15) {
+                    flames.addLine(to: CGPoint(x: x + 12, y: -13))
+                    flames.addLine(to: CGPoint(x: x + 6, y: 12))
+                }
+                flames.closeSubpath()
+                layer.fill(flames, with: .color(OceanPalette.gold))
+            } else if style == .chrome {
+                for x: CGFloat in [-24, 14] {
+                    let speaker = Path(roundedRect: CGRect(x: x, y: -36, width: 16, height: 19), cornerRadius: 3)
+                    layer.fill(speaker, with: .color(OceanPalette.ink))
+                    layer.stroke(Path(ellipseIn: CGRect(x: x + 3, y: -32, width: 10, height: 10)), with: .color(.white), lineWidth: 2)
+                }
+            }
             let shine = Path(roundedRect: CGRect(x: -23, y: -14, width: 39, height: 3), cornerRadius: 1.5)
             layer.fill(shine, with: .color(.white.opacity(0.38)))
             for x: CGFloat in [-13, 11] {
@@ -1632,6 +1729,9 @@ struct ContentView: View {
     @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
     @State private var showingMap = false
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
+    @State private var showingGarage = false
+    @State private var pendingStyle: SubmarineStyle?
+    @State private var garageMessage = ""
 
     init(engine: GameEngine = GameEngine()) {
         let arguments = ProcessInfo.processInfo.arguments
@@ -1701,6 +1801,8 @@ struct ContentView: View {
             UIAccessibility.post(notification: .screenChanged, argument: nil)
             focusedControl = destination
         }
+        .sheet(isPresented: $showingGarage) { garagePanel }
+
     }
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
@@ -1753,6 +1855,15 @@ struct ContentView: View {
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
                 Button {
+                    garageMessage = ""
+                    showingGarage = true
+                } label: {
+                    Label("Гараж · \(engine.crystals) кристаллов", systemImage: "wrench.and.screwdriver")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .accessibilityHint("Кастомизация подлодки перед экспедицией")
+                .accessibilityIdentifier("openGarage")
+                Button {
                     showingMap = false
                     engine.startGame()
                 } label: {
@@ -1778,6 +1889,58 @@ struct ContentView: View {
         }
         .padding(.horizontal, 26)
         .accessibilityElement(children: .contain)
+    }
+
+    private var garagePanel: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Подлодка на прокачку").font(.title.bold()).accessibilityAddTraits(.isHeader)
+                    Text("Баланс: \(engine.crystals) кристаллов").font(.headline)
+                    Text("Собирай ромбовидные кристаллы в океане: каждая находка даёт 10. Они сохраняются сразу, даже при поражении. Стили покупаются навсегда и меняют только внешность.")
+                    Text("Установлено: \(engine.selectedStyle.title). \(engine.selectedStyle.description)")
+                    ForEach(SubmarineStyle.allCases) { style in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(style.title).font(.headline).accessibilityAddTraits(.isHeader)
+                            Text(style.description)
+                            Text(engine.selectedStyle == style ? "Выбрано" : (engine.owns(style) ? "Куплено" : "Цена: \(style.price) кристаллов"))
+                            if !engine.owns(style), engine.crystals < style.price {
+                                Text("Не хватает \(style.price - engine.crystals) кристаллов")
+                            }
+                            Button {
+                                if engine.owns(style) { applyStyle(style) }
+                                else { pendingStyle = style }
+                            } label: {
+                                Text(engine.selectedStyle == style ? "Установлено" : (engine.owns(style) ? "Установить" : "Купить за \(style.price) кристаллов"))
+                                    .frame(minHeight: 44)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(engine.selectedStyle == style || (!engine.owns(style) && engine.crystals < style.price))
+                            .accessibilityLabel("\(style.title): \(engine.owns(style) ? "установить" : "купить за \(style.price) кристаллов")")
+                            .accessibilityValue(engine.selectedStyle == style ? "Выбрано" : (engine.owns(style) ? "Куплено" : "Не куплено"))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding().background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    if !garageMessage.isEmpty { Text(garageMessage).accessibilityIdentifier("garageResult") }
+                }.padding()
+            }
+            .navigationTitle("Гараж")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { showingGarage = false } } }
+            .alert("Купить стиль?", isPresented: Binding(get: { pendingStyle != nil }, set: { if !$0 { pendingStyle = nil } })) {
+                if let style = pendingStyle {
+                    Button("Купить за \(style.price) кристаллов") { applyStyle(style); pendingStyle = nil }
+                    Button("Отмена", role: .cancel) { pendingStyle = nil }
+                }
+            } message: {
+                if let style = pendingStyle { Text("\(style.title). \(style.description) Спишется \(style.price) кристаллов. Стиль будет установлен сразу.") }
+            }
+        }
+    }
+
+    private func applyStyle(_ style: SubmarineStyle) {
+        garageMessage = engine.customize(style)
+        UIAccessibility.post(notification: .announcement, argument: garageMessage)
     }
 
     private var brand: some View {
