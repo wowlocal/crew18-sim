@@ -56,6 +56,52 @@ final class GameEngineTests: XCTestCase {
         advance(engine, 0.5, fps: fps)
     }
 
+    func testCrystalWalletAndPurchasesSurviveReload() {
+        let suite = "GarageTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var level = empty
+        level.pickups = [OceanPickup(id: 1, kind: .crystal, position: level.spawn),
+                         OceanPickup(id: 2, kind: .crystal, position: level.spawn)]
+        let engine = makeEngine(level: level, defaults: defaults)
+        advance(engine, 0.1)
+        XCTAssertEqual(engine.crystals, 20)
+        advance(engine, 1)
+        XCTAssertEqual(engine.crystals, 20, "A pickup must credit only once per expedition")
+        engine.customize(.neon)
+        XCTAssertFalse(engine.owns(.neon), "Purchasing during a run is forbidden")
+        engine.returnToMenu()
+        engine.customize(.chrome)
+        XCTAssertEqual(engine.crystals, 20)
+        XCTAssertFalse(engine.owns(.chrome))
+        engine.customize(.neon)
+        XCTAssertEqual(engine.crystals, 0)
+        XCTAssertEqual(engine.selectedStyle, .neon)
+        engine.customize(.classic)
+        engine.customize(.neon)
+        XCTAssertEqual(engine.crystals, 0, "Owned styles equip for free")
+        let restored = GameEngine(defaults: defaults, level: level)
+        XCTAssertEqual(restored.selectedStyle, .neon)
+        XCTAssertTrue(restored.owns(.neon))
+        XCTAssertEqual(restored.crystals, 0)
+        restored.startGame()
+        advance(restored, 0.1)
+        XCTAssertEqual(restored.crystals, 20, "New expeditions replenish crystal pickups")
+        XCTAssertEqual(restored.selectedStyle, .neon)
+    }
+
+    func testCrystalsPersistWithoutFinishingExpedition() {
+        let suite = "GarageTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var level = empty
+        level.pickups = [OceanPickup(id: 1, kind: .crystal, position: level.spawn)]
+        let engine = makeEngine(level: level, defaults: defaults)
+        advance(engine, 0.1)
+        XCTAssertEqual(GameEngine(defaults: defaults).crystals, 10)
+        XCTAssertEqual(engine.cargoValue, 0, "Crystals do not change salvage scoring")
+    }
+
     func testNeutralBuoyancyDoesNotMoveOrDrainEnergy() {
         let engine = makeEngine()
         let position = engine.position

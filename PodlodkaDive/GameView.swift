@@ -5,6 +5,9 @@ struct GameView: View {
     @StateObject private var engine: GameEngine
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingMap = false
+    @State private var showingGarage = false
+    @State private var pendingStyle: SubmarineStyle?
+    @State private var garageMessage = ""
 
     init(engine: GameEngine = GameEngine()) {
         _engine = StateObject(wrappedValue: engine)
@@ -46,6 +49,8 @@ struct GameView: View {
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.success, trigger: engine.state == .completed)
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showingGarage) { garagePanel }
+
     }
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
@@ -91,6 +96,15 @@ struct GameView: View {
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
                 Button {
+                    garageMessage = ""
+                    showingGarage = true
+                } label: {
+                    Label("Гараж · \(engine.crystals) кристаллов", systemImage: "wrench.and.screwdriver")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .accessibilityHint("Кастомизация подлодки перед экспедицией")
+                .accessibilityIdentifier("openGarage")
+                Button {
                     showingMap = false
                     engine.startGame()
                 } label: {
@@ -103,6 +117,58 @@ struct GameView: View {
             .padding(.bottom, max(insets.bottom, 24) + 16)
         }
         .padding(.horizontal, 26)
+    }
+
+    private var garagePanel: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Подлодка на прокачку").font(.title.bold()).accessibilityAddTraits(.isHeader)
+                    Text("Баланс: \(engine.crystals) кристаллов").font(.headline)
+                    Text("Собирай ромбовидные кристаллы в океане: каждая находка даёт 10. Они сохраняются сразу, даже при поражении. Стили покупаются навсегда и меняют только внешность.")
+                    Text("Установлено: \(engine.selectedStyle.title). \(engine.selectedStyle.description)")
+                    ForEach(SubmarineStyle.allCases) { style in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(style.title).font(.headline).accessibilityAddTraits(.isHeader)
+                            Text(style.description)
+                            Text(engine.selectedStyle == style ? "Выбрано" : (engine.owns(style) ? "Куплено" : "Цена: \(style.price) кристаллов"))
+                            if !engine.owns(style), engine.crystals < style.price {
+                                Text("Не хватает \(style.price - engine.crystals) кристаллов")
+                            }
+                            Button {
+                                if engine.owns(style) { applyStyle(style) }
+                                else { pendingStyle = style }
+                            } label: {
+                                Text(engine.selectedStyle == style ? "Установлено" : (engine.owns(style) ? "Установить" : "Купить за \(style.price) кристаллов"))
+                                    .frame(minHeight: 44)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(engine.selectedStyle == style || (!engine.owns(style) && engine.crystals < style.price))
+                            .accessibilityLabel("\(style.title): \(engine.owns(style) ? "установить" : "купить за \(style.price) кристаллов")")
+                            .accessibilityValue(engine.selectedStyle == style ? "Выбрано" : (engine.owns(style) ? "Куплено" : "Не куплено"))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding().background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    if !garageMessage.isEmpty { Text(garageMessage).accessibilityIdentifier("garageResult") }
+                }.padding()
+            }
+            .navigationTitle("Гараж")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { showingGarage = false } } }
+            .alert("Купить стиль?", isPresented: Binding(get: { pendingStyle != nil }, set: { if !$0 { pendingStyle = nil } })) {
+                if let style = pendingStyle {
+                    Button("Купить за \(style.price) кристаллов") { applyStyle(style); pendingStyle = nil }
+                    Button("Отмена", role: .cancel) { pendingStyle = nil }
+                }
+            } message: {
+                if let style = pendingStyle { Text("\(style.title). \(style.description) Спишется \(style.price) кристаллов. Стиль будет установлен сразу.") }
+            }
+        }
+    }
+
+    private func applyStyle(_ style: SubmarineStyle) {
+        garageMessage = engine.customize(style)
+        UIAccessibility.post(notification: .announcement, argument: garageMessage)
     }
 
     private var brand: some View {

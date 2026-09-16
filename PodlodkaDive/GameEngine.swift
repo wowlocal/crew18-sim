@@ -4,8 +4,39 @@ import QuartzCore
 
 enum RunState: Equatable { case ready, playing, paused, gameOver, completed }
 enum FailureReason { case hull, energy }
-enum PickupKind: String { case battery, shield, sample, blackBox }
+enum PickupKind: String { case battery, shield, sample, blackBox, crystal }
 enum MinePhase { case idle, armed, exploding, spent }
+
+enum SubmarineStyle: String, CaseIterable, Codable, Identifiable {
+    case classic, neon, flames, chrome
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .classic: return "Классика"
+        case .neon: return "Неоновая глубина"
+        case .flames: return "Огненный рейс"
+        case .chrome: return "Хром и бас"
+        }
+    }
+    var price: Int {
+        switch self { case .classic: return 0; case .neon: return 20; case .flames: return 40; case .chrome: return 60 }
+    }
+    var description: String {
+        switch self {
+        case .classic: return "Золотистый корпус с круглыми иллюминаторами."
+        case .neon: return "Фиолетовый корпус, бирюзовая неоновая окантовка и подсветка днища."
+        case .flames: return "Красный корпус с золотыми языками пламени вдоль борта."
+        case .chrome: return "Серебристый хромированный корпус и две большие колонки на крыше."
+        }
+    }
+}
+
+/// A single saved value keeps the wallet, purchases and selection together.
+private struct GarageSave: Codable {
+    var crystals = 0
+    var unlocked: Set<SubmarineStyle> = [.classic]
+    var selected: SubmarineStyle = .classic
+}
 
 struct OceanPickup: Identifiable {
     let id: Int
@@ -118,7 +149,9 @@ struct OceanLevel {
                 pickup(7, .sample, 390, 320), pickup(8, .sample, 740, 830),
                 pickup(9, .sample, 1220, 1080), pickup(10, .sample, 465, 1370),
                 pickup(11, .sample, 820, 1770), pickup(12, .sample, 1350, 1660),
-                pickup(13, .sample, 190, 2250), pickup(14, .sample, 900, 2450)
+                pickup(13, .sample, 190, 2250), pickup(14, .sample, 900, 2450),
+                pickup(15, .crystal, 320, 320), pickup(16, .crystal, 740, 900),
+                pickup(17, .crystal, 440, 1700), pickup(18, .crystal, 1350, 1740)
             ],
             mines: [
                 OceanMine(id: 0, position: CGPoint(x: 820, y: 700)),
@@ -143,6 +176,11 @@ final class GameEngine: NSObject, ObservableObject {
     @Published private(set) var bestScore: Int
     @Published private(set) var pickupCount = 0
     @Published private(set) var damageCount = 0
+
+    @Published private var garage: GarageSave
+    private static let garageKey = "podlodkaDive.garage.v1"
+    var crystals: Int { garage.crystals }
+    var selectedStyle: SubmarineStyle { garage.selected }
 
     let level: OceanLevel
     private(set) var viewport = CGSize(width: 390, height: 844)
@@ -185,6 +223,12 @@ final class GameEngine: NSObject, ObservableObject {
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition) {
+        var saved = defaults.data(forKey: Self.garageKey)
+            .flatMap { try? JSONDecoder().decode(GarageSave.self, from: $0) } ?? GarageSave()
+        saved.crystals = max(0, saved.crystals)
+        saved.unlocked.insert(.classic)
+        if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
+        garage = saved
         self.defaults = defaults
         self.level = level
         position = level.spawn
@@ -206,6 +250,27 @@ final class GameEngine: NSObject, ObservableObject {
     var canBoost: Bool { state == .playing && boostCooldown <= 0 && energy >= Self.boostCost }
     var canSonar: Bool { state == .playing && sonarCooldown <= 0 }
     var submarineRotationRadians: Double { Double(atan2(velocity.dy, max(55, abs(velocity.dx)))) * 0.55 }
+
+    func owns(_ style: SubmarineStyle) -> Bool { garage.unlocked.contains(style) }
+
+    /// Purchases and equipment changes are allowed only before an expedition.
+    @discardableResult
+    func customize(_ style: SubmarineStyle) -> String {
+        guard state == .ready else { return "Открой гараж перед началом экспедиции." }
+        let purchased = !owns(style)
+        if purchased {
+            guard crystals >= style.price else { return "Не хватает кристаллов: нужно ещё \(style.price - crystals)." }
+            garage.crystals -= style.price
+            garage.unlocked.insert(style)
+        }
+        garage.selected = style
+        saveGarage()
+        return "\(purchased ? "Куплено и установлено" : "Установлено"): \(style.title). Баланс: \(crystals) кристаллов."
+    }
+
+    private func saveGarage() {
+        if let data = try? JSONEncoder().encode(garage) { defaults.set(data, forKey: Self.garageKey) }
+    }
 
     func resize(to size: CGSize) {
         guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return }
@@ -468,6 +533,10 @@ final class GameEngine: NSObject, ObservableObject {
             pickups[index].collected = true
             pickupCount += 1
             switch pickup.kind {
+            case .crystal:
+                garage.crystals += 10
+                saveGarage()
+                announce("Кристаллы · +10. Баланс: \(crystals)")
             case .battery:
                 energy = min(100, energy + 30)
                 announce("Батарея · +30 энергии")
