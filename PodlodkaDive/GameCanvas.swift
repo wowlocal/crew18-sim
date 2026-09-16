@@ -12,6 +12,7 @@ enum OceanPalette {
 
 struct GameCanvas: View {
     @ObservedObject var engine: GameEngine
+    let nightExpedition: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var time: Double { reduceMotion ? 0 : engine.elapsed }
 
@@ -363,14 +364,16 @@ struct GameCanvas: View {
             layer.rotate(by: .radians(ready ? -0.055 : engine.submarineRotationRadians * Double(facing)))
             layer.scaleBy(x: boatScale * facing, y: boatScale)
             if !ready && engine.invulnerability > 0 { layer.opacity = reduceMotion ? 0.65 : 0.45 + abs(sin(time * 18)) * 0.55 }
-            var beam = Path()
-            beam.move(to: CGPoint(x: 32, y: -3))
-            beam.addLine(to: CGPoint(x: 186, y: -59))
-            beam.addQuadCurve(to: CGPoint(x: 186, y: 59), control: CGPoint(x: 207, y: 0))
-            beam.addLine(to: CGPoint(x: 32, y: 6))
-            beam.closeSubpath()
-            layer.fill(beam, with: .linearGradient(Gradient(colors: [OceanPalette.gold.opacity(0.12), .clear]),
-                startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: 180, y: 0)))
+            if !nightExpedition {
+                var beam = Path()
+                beam.move(to: CGPoint(x: 32, y: -3))
+                beam.addLine(to: CGPoint(x: 186, y: -59))
+                beam.addQuadCurve(to: CGPoint(x: 186, y: 59), control: CGPoint(x: 207, y: 0))
+                beam.addLine(to: CGPoint(x: 32, y: 6))
+                beam.closeSubpath()
+                layer.fill(beam, with: .linearGradient(Gradient(colors: [OceanPalette.gold.opacity(0.12), .clear]),
+                    startPoint: CGPoint(x: 32, y: 0), endPoint: CGPoint(x: 180, y: 0)))
+            }
 
             let darkGold = Color(red: 0.63, green: 0.34, blue: 0.12)
             var fin = Path()
