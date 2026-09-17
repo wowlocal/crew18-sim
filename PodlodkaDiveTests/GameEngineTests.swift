@@ -1406,8 +1406,10 @@ extension BlackBoxTests {
 @MainActor
 private final class MemoryReminders: ReminderClient {
     var allowed = true
+    var authorizationRequests = 0
     var requests: [String: UNNotificationRequest] = [:]
-    func authorize() async throws -> Bool { allowed }
+    func authorize() async throws -> Bool { authorizationRequests += 1; return allowed }
+    func pending() async -> [UNNotificationRequest] { Array(requests.values) }
     func replace(_ requests: [UNNotificationRequest]) async throws {
         self.requests = Dictionary(uniqueKeysWithValues: requests.map { ($0.identifier, $0) })
     }
@@ -1416,6 +1418,54 @@ private final class MemoryReminders: ReminderClient {
 
 @MainActor
 final class ExpeditionRecoveryTests: XCTestCase {
+    func testReminderPreviewReadsQueueWithoutSchedulingOrAuthorization() async throws {
+        let (engine, recovery, client, _) = fixture()
+        engine.startGame()
+        XCTAssertTrue(recovery.save(exiting: false))
+        let id = try XCTUnwrap(recovery.savedID)
+        await recovery.settle()
+        let requests = ReminderPlan.requests(id: id, eventID: UUID(), now: Date(), calendar: .current)
+        try await client.replace(requests.reversed())
+        let historyCount = recovery.history.count
+        let previews = await recovery.reminderPreviews()
+        XCTAssertEqual(previews.map(\.id), ["expedition.return.1", "expedition.return.7"])
+        XCTAssertEqual(previews.first?.title, requests.first?.content.title)
+        XCTAssertEqual(previews.first?.body, requests.first?.content.body)
+        XCTAssertEqual(previews.first?.date, (requests.first?.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate())
+        XCTAssertEqual(previews.first?.url, ReturnRoute(id: id).url)
+        XCTAssertEqual(client.authorizationRequests, 0)
+        XCTAssertEqual(client.requests.count, 2)
+        XCTAssertEqual(recovery.history.count, historyCount)
+        XCTAssertEqual(engine.state, .playing)
+        // Opening the preview uses the same route and cancellation as a notification tap.
+        recovery.open(try XCTUnwrap(previews.first?.url))
+        await recovery.settle()
+        XCTAssertEqual(engine.state, .paused)
+        XCTAssertTrue(client.requests.isEmpty)
+        let afterOpen = await recovery.reminderPreviews()
+        XCTAssertTrue(afterOpen.isEmpty)
+    }
+
+    func testReminderPreviewExcludesOtherExpeditionsAndUnrelatedRequests() async throws {
+        let (engine, recovery, client, _) = fixture()
+        engine.startGame()
+        XCTAssertTrue(recovery.save(exiting: false))
+        let id = try XCTUnwrap(recovery.savedID)
+        await recovery.settle()
+        let unrelated = UNNotificationRequest(identifier: "other", content: UNMutableNotificationContent(),
+                                              trigger: UNTimeIntervalNotificationTrigger(timeInterval: 60, repeats: false))
+        let stale = ReminderPlan.requests(id: UUID(), eventID: UUID(), now: Date(), calendar: .current)
+        try await client.replace(stale + [unrelated])
+        let previews = await recovery.reminderPreviews()
+        XCTAssertTrue(previews.isEmpty)
+        XCTAssertEqual(client.requests.count, 3)
+        try await client.replace(ReminderPlan.requests(id: id, eventID: UUID(), now: Date(), calendar: .current))
+        recovery.deleteSave()
+        let afterDelete = await recovery.reminderPreviews()
+        XCTAssertTrue(afterDelete.isEmpty)
+        XCTAssertEqual(client.authorizationRequests, 0)
+    }
+
     private func fixture() -> (GameEngine, ExpeditionRecovery, MemoryReminders, URL) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let defaults = UserDefaults(suiteName: UUID().uuidString)!

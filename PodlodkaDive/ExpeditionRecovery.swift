@@ -28,6 +28,7 @@ struct ReturnEvent: Codable, Identifiable {
 @MainActor
 protocol ReminderClient {
     func authorize() async throws -> Bool
+    func pending() async -> [UNNotificationRequest]
     func replace(_ requests: [UNNotificationRequest]) async throws
     func cancel()
 }
@@ -37,6 +38,9 @@ final class LocalReminderClient: ReminderClient {
     let center = UNUserNotificationCenter.current()
     func authorize() async throws -> Bool {
         try await center.requestAuthorization(options: [.alert, .sound, .badge])
+    }
+    func pending() async -> [UNNotificationRequest] {
+        await center.pendingNotificationRequests()
     }
     func replace(_ requests: [UNNotificationRequest]) async throws {
         cancel()
@@ -199,6 +203,30 @@ final class ExpeditionRecovery: ObservableObject {
     }
     func canOpen(_ event: ReturnEvent) -> Bool { event.expedition != nil && event.expedition == savedID }
 
+    struct ReminderPreview: Identifiable {
+        let id: String
+        let title: String
+        let body: String
+        let date: Date
+        let url: URL
+    }
+
+    /// Read the system queue, not the historical scheduling event. Never asks for permission.
+    func reminderPreviews() async -> [ReminderPreview] {
+        await settle()
+        let requests = await client.pending()
+        guard let savedID else { return [] }
+        return requests.compactMap { request in
+            guard LocalReminderClient.identifiers.contains(request.identifier),
+                  let raw = request.content.userInfo["url"] as? String,
+                  let url = URL(string: raw), ReturnRoute(url: url)?.id == savedID,
+                  let trigger = request.trigger as? UNCalendarNotificationTrigger,
+                  let date = trigger.nextTriggerDate() else { return nil }
+            return ReminderPreview(id: request.identifier, title: request.content.title,
+                                   body: request.content.body, date: date, url: url)
+        }.sorted { $0.date < $1.date }
+    }
+
     private func schedule(id: UUID) {
         generation = UUID()
         remindersPending = true
@@ -280,14 +308,44 @@ struct ReturnEventsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var filter: ExpeditionRecovery.Filter = .all
     @AccessibilityFocusState private var titleFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var previews: [ExpeditionRecovery.ReminderPreview] = []
+    @State private var loadingPreviews = true
     var body: some View {
         NavigationStack {
             List {
-                Button("Готово") { dismiss() }.font(.body).frame(minHeight: 44).accessibilityIdentifier("closeEvents")
-                Picker("Фильтр событий", selection: $filter) {
+                Button("Готово") { dismiss() }.font(.body).frame(minHeight: 44).accessibilityIdentifier("closeEvents").accessibilityFocused($titleFocused)
+                Section("Предпросмотр напоминаний") {
+                    if loadingPreviews {
+                        ProgressView("Проверяем напоминания")
+                    } else if previews.isEmpty {
+                        Text("Нет запланированных напоминаний для сохранённой экспедиции.")
+                    } else {
+                        ForEach(previews) { preview in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(preview.title).font(.headline)
+                                Text(preview.body)
+                                Text(preview.date, format: .dateTime.day().month().year().hour().minute())
+                                Button("Проверить переход в экспедицию") {
+                                    dismiss(); open(preview.url)
+                                }
+                                .accessibilityHint("Открывает сохранение на паузе и отменяет оставшиеся напоминания")
+                            }.padding(.vertical, 4)
+                        }
+                        Text("Время местное. Показ уведомления зависит от настроек уведомлений и режима фокусирования iOS.")
+                    }
+                    Button {
+                        Task { await refreshPreviews() }
+                    } label: {
+                        Text("Обновить напоминания").fixedSize(horizontal: false, vertical: true)
+                    }.font(.body).frame(minHeight: 44).disabled(loadingPreviews)
+                }
+                Picker(selection: $filter) {
                     ForEach(ExpeditionRecovery.Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }.accessibilityIdentifier("eventFilter").accessibilityFocused($titleFocused)
-                if recovery.events(filter).isEmpty { Text("Нет событий").accessibilityIdentifier("emptyEvents") }
+                } label: {
+                    Text("Фильтр событий").fixedSize(horizontal: false, vertical: true)
+                }.font(.body).frame(minHeight: 44).accessibilityIdentifier("eventFilter")
+                if recovery.events(filter).isEmpty { Text("Нет событий").font(.body).fixedSize(horizontal: false, vertical: true).frame(minHeight: 44).accessibilityIdentifier("emptyEvents") }
                 ForEach(recovery.events(filter)) { event in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(event.title).font(.headline)
@@ -302,8 +360,18 @@ struct ReturnEventsView: View {
                     }.padding(.vertical, 4)
                 }
             }
+            .font(.body)
             .navigationTitle("События")
             .onAppear { titleFocused = true }
+            .task(id: scenePhase) {
+                if scenePhase == .active { await refreshPreviews() }
+            }
         }
+    }
+
+    @MainActor private func refreshPreviews() async {
+        loadingPreviews = true
+        previews = await recovery.reminderPreviews()
+        loadingPreviews = false
     }
 }
