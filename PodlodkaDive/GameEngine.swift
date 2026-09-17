@@ -322,6 +322,38 @@ enum GameEvent: Equatable {
     case situation(SituationSummary)
 }
 
+/// A bounded, session-local historical record written on events and periodic reports.
+struct ExpeditionLogEntry: Identifiable {
+    enum Level: String { case event = "Событие", warning = "Опасность", error = "Ошибка", state = "Состояние" }
+    let id = UUID()
+    let date = Date()
+    let expedition: Int
+    let seconds: TimeInterval
+    let level: Level
+    let message: String
+    let snapshot: String
+    let crewPhrase: String?
+}
+
+@MainActor
+final class CrewEventLog {
+    private(set) var entries: [ExpeditionLogEntry] = []
+    static let capacity = 500
+
+    func record(expedition: Int, seconds: TimeInterval, level: ExpeditionLogEntry.Level,
+                message: String, snapshot: String, crewPhrase: String? = nil) {
+        entries.append(ExpeditionLogEntry(expedition: expedition, seconds: seconds,
+                                          level: level, message: message, snapshot: snapshot, crewPhrase: crewPhrase))
+        if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
+    }
+}
+
+struct JournalLeak {
+    let phrase: String
+    let startedAt: TimeInterval
+    let side: CGFloat
+}
+
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
     private(set) var expeditionId: String?
@@ -397,6 +429,23 @@ final class GameEngine: NSObject, ObservableObject {
     let captainLogger: CaptainLogger
     private var expeditionID = UUID()
     let events = PassthroughSubject<GameEvent, Never>()
+    let crewJournal = CrewEventLog()
+    private(set) var expeditionNumber = 0
+    private(set) var journalLeak: JournalLeak?
+    private var nextLeakAt: TimeInterval = 0
+    private var nextSnapshotAt: TimeInterval = 15
+    private var leakOnLeft = false
+
+    private func log(_ message: String, level: ExpeditionLogEntry.Level = .event, phrase: String? = nil) {
+        crewJournal.record(expedition: expeditionNumber, seconds: runElapsed, level: level,
+                       message: message, snapshot: "\(state) · \(zone) · \(accessibilityStatus)", crewPhrase: phrase)
+        if let phrase, state == .playing, runElapsed >= nextLeakAt {
+            leakOnLeft.toggle()
+            journalLeak = JournalLeak(phrase: phrase, startedAt: runElapsed, side: leakOnLeft ? -1 : 1)
+            nextLeakAt = runElapsed + 8
+        }
+    }
+
     @Published private(set) var state: RunState = .ready {
         didSet {
             if oldValue != state {
@@ -655,6 +704,10 @@ final class GameEngine: NSObject, ObservableObject {
         lastSteeringTime = -1
         closeJournal("Экспедиция прервана: начато новое погружение")
         expeditionID = UUID()
+        expeditionNumber += 1
+        journalLeak = nil
+        nextLeakAt = 0
+        nextSnapshotAt = 15
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
@@ -705,12 +758,15 @@ final class GameEngine: NSObject, ObservableObject {
         journal("start")
         navigate(to: "Game", reason: "start")
         journal("snapshot")
+        log("Экспедиция началась", phrase: "Капитан: погружаемся!")
     }
 
     func returnToMenu() {
         navigate(to: "Welcome", reason: "surface")
         if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "surface") }
         closeJournal("Экспедиция прервана: возвращение в меню")
+        log("Возвращение в меню")
+        journalLeak = nil
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -790,6 +846,7 @@ final class GameEngine: NSObject, ObservableObject {
         checkEnergyWarning()
         boostRemaining = 1.1
         boostCooldown = 4.5
+        log("Форсаж включён", phrase: "Механик: полный вперёд!")
         if energy <= 0 { finish(success: false, reason: .energy) }
         objectWillChange.send()
     }
@@ -842,6 +899,7 @@ final class GameEngine: NSObject, ObservableObject {
         journal("pause")
         navigate(to: screen, reason: screen == "Map" ? "openMap" : "pause")
         receiptJournal.flush()
+        log("Экспедиция приостановлена", level: .state)
         accumulator = 0
         previousTimestamp = nil
     }
@@ -855,6 +913,7 @@ final class GameEngine: NSObject, ObservableObject {
             state = .playing
             journal("resume")
             navigate(to: "Game", reason: "resume")
+            log("Экспедиция продолжена", level: .state)
         } else { pause() }
     }
 
@@ -917,6 +976,12 @@ final class GameEngine: NSObject, ObservableObject {
     private func simulate(_ delta: TimeInterval) {
         let dt = CGFloat(delta)
         runElapsed += delta
+        if let leak = journalLeak, runElapsed - leak.startedAt >= 3.5 { journalLeak = nil }
+        if runElapsed >= nextSnapshotAt {
+            nextSnapshotAt = runElapsed + 15
+            log("Плановый доклад экипажа", level: .state,
+                phrase: energy <= 25 ? "Механик: бережём заряд!" : "Штурман: глубина \(depth) м")
+        }
         boostCooldown = max(0, boostCooldown - delta)
         lightBoostCooldown = max(0, lightBoostCooldown - delta)
         lightBoostRemaining = max(0, lightBoostRemaining - delta)
@@ -986,6 +1051,7 @@ final class GameEngine: NSObject, ObservableObject {
             log("energy.low", "Осталось менее 25% энергии", severity: "warning")
             logWatch("energy.low", "Критический заряд батареи")
             events.send(.energyLow)
+            log("Низкий заряд: пора возвращаться", level: .warning, phrase: "Механик: бережём заряд!")
         }
     }
 
@@ -1276,6 +1342,8 @@ final class GameEngine: NSObject, ObservableObject {
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
         log("notice", text, severity: urgent ? "warning" : "info")
         logWatch(urgent ? "danger" : "event", text)
+        log(text, level: urgent ? .warning : .event,
+            phrase: urgent ? "Экипаж: осторожно!" : "Борт: " + String(text.prefix(48)))
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
@@ -1333,12 +1401,14 @@ final class GameEngine: NSObject, ObservableObject {
             }
             state = .completed
             closeJournal("Чёрный ящик доставлен. Добыча: \(score)")
+            log("Экспедиция завершена. Доставлено: \(score)")
         } else {
             if reason == .energy { events.send(.danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась"))) }
             failureReason = reason
             score = 0
             state = .gameOver
             closeJournal(reason == .energy ? "Энергия закончилась. Добыча потеряна" : "Корпус разрушен. Добыча потеряна", severity: "error")
+            log(reason == .energy ? "Энергия закончилась" : "Корпус разрушен", level: .error)
         }
     }
 

@@ -1857,6 +1857,38 @@ enum GameEvent: Equatable {
     case situation(SituationSummary)
 }
 
+/// A bounded, session-local historical record written on events and periodic reports.
+struct ExpeditionLogEntry: Identifiable {
+    enum Level: String { case event = "Событие", warning = "Опасность", error = "Ошибка", state = "Состояние" }
+    let id = UUID()
+    let date = Date()
+    let expedition: Int
+    let seconds: TimeInterval
+    let level: Level
+    let message: String
+    let snapshot: String
+    let crewPhrase: String?
+}
+
+@MainActor
+final class CrewEventLog {
+    private(set) var entries: [ExpeditionLogEntry] = []
+    static let capacity = 500
+
+    func record(expedition: Int, seconds: TimeInterval, level: ExpeditionLogEntry.Level,
+                message: String, snapshot: String, crewPhrase: String? = nil) {
+        entries.append(ExpeditionLogEntry(expedition: expedition, seconds: seconds,
+                                          level: level, message: message, snapshot: snapshot, crewPhrase: crewPhrase))
+        if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
+    }
+}
+
+struct JournalLeak {
+    let phrase: String
+    let startedAt: TimeInterval
+    let side: CGFloat
+}
+
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
     private(set) var expeditionId: String?
@@ -1932,6 +1964,23 @@ final class GameEngine: NSObject, ObservableObject {
     let captainLogger: CaptainLogger
     private var expeditionID = UUID()
     let events = PassthroughSubject<GameEvent, Never>()
+    let crewJournal = CrewEventLog()
+    private(set) var expeditionNumber = 0
+    private(set) var journalLeak: JournalLeak?
+    private var nextLeakAt: TimeInterval = 0
+    private var nextSnapshotAt: TimeInterval = 15
+    private var leakOnLeft = false
+
+    private func log(_ message: String, level: ExpeditionLogEntry.Level = .event, phrase: String? = nil) {
+        crewJournal.record(expedition: expeditionNumber, seconds: runElapsed, level: level,
+                       message: message, snapshot: "\(state) · \(zone) · \(accessibilityStatus)", crewPhrase: phrase)
+        if let phrase, state == .playing, runElapsed >= nextLeakAt {
+            leakOnLeft.toggle()
+            journalLeak = JournalLeak(phrase: phrase, startedAt: runElapsed, side: leakOnLeft ? -1 : 1)
+            nextLeakAt = runElapsed + 8
+        }
+    }
+
     @Published private(set) var state: RunState = .ready {
         didSet {
             if oldValue != state {
@@ -2190,6 +2239,10 @@ final class GameEngine: NSObject, ObservableObject {
         lastSteeringTime = -1
         closeJournal("Экспедиция прервана: начато новое погружение")
         expeditionID = UUID()
+        expeditionNumber += 1
+        journalLeak = nil
+        nextLeakAt = 0
+        nextSnapshotAt = 15
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
@@ -2240,12 +2293,15 @@ final class GameEngine: NSObject, ObservableObject {
         journal("start")
         navigate(to: "Game", reason: "start")
         journal("snapshot")
+        log("Экспедиция началась", phrase: "Капитан: погружаемся!")
     }
 
     func returnToMenu() {
         navigate(to: "Welcome", reason: "surface")
         if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "surface") }
         closeJournal("Экспедиция прервана: возвращение в меню")
+        log("Возвращение в меню")
+        journalLeak = nil
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -2325,6 +2381,7 @@ final class GameEngine: NSObject, ObservableObject {
         checkEnergyWarning()
         boostRemaining = 1.1
         boostCooldown = 4.5
+        log("Форсаж включён", phrase: "Механик: полный вперёд!")
         if energy <= 0 { finish(success: false, reason: .energy) }
         objectWillChange.send()
     }
@@ -2377,6 +2434,7 @@ final class GameEngine: NSObject, ObservableObject {
         journal("pause")
         navigate(to: screen, reason: screen == "Map" ? "openMap" : "pause")
         receiptJournal.flush()
+        log("Экспедиция приостановлена", level: .state)
         accumulator = 0
         previousTimestamp = nil
     }
@@ -2390,6 +2448,7 @@ final class GameEngine: NSObject, ObservableObject {
             state = .playing
             journal("resume")
             navigate(to: "Game", reason: "resume")
+            log("Экспедиция продолжена", level: .state)
         } else { pause() }
     }
 
@@ -2452,6 +2511,12 @@ final class GameEngine: NSObject, ObservableObject {
     private func simulate(_ delta: TimeInterval) {
         let dt = CGFloat(delta)
         runElapsed += delta
+        if let leak = journalLeak, runElapsed - leak.startedAt >= 3.5 { journalLeak = nil }
+        if runElapsed >= nextSnapshotAt {
+            nextSnapshotAt = runElapsed + 15
+            log("Плановый доклад экипажа", level: .state,
+                phrase: energy <= 25 ? "Механик: бережём заряд!" : "Штурман: глубина \(depth) м")
+        }
         boostCooldown = max(0, boostCooldown - delta)
         lightBoostCooldown = max(0, lightBoostCooldown - delta)
         lightBoostRemaining = max(0, lightBoostRemaining - delta)
@@ -2521,6 +2586,7 @@ final class GameEngine: NSObject, ObservableObject {
             log("energy.low", "Осталось менее 25% энергии", severity: "warning")
             logWatch("energy.low", "Критический заряд батареи")
             events.send(.energyLow)
+            log("Низкий заряд: пора возвращаться", level: .warning, phrase: "Механик: бережём заряд!")
         }
     }
 
@@ -2811,6 +2877,8 @@ final class GameEngine: NSObject, ObservableObject {
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
         log("notice", text, severity: urgent ? "warning" : "info")
         logWatch(urgent ? "danger" : "event", text)
+        log(text, level: urgent ? .warning : .event,
+            phrase: urgent ? "Экипаж: осторожно!" : "Борт: " + String(text.prefix(48)))
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
@@ -2868,12 +2936,14 @@ final class GameEngine: NSObject, ObservableObject {
             }
             state = .completed
             closeJournal("Чёрный ящик доставлен. Добыча: \(score)")
+            log("Экспедиция завершена. Доставлено: \(score)")
         } else {
             if reason == .energy { events.send(.danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась"))) }
             failureReason = reason
             score = 0
             state = .gameOver
             closeJournal(reason == .energy ? "Энергия закончилась. Добыча потеряна" : "Корпус разрушен. Добыча потеряна", severity: "error")
+            log(reason == .energy ? "Энергия закончилась" : "Корпус разрушен", level: .error)
         }
     }
 
@@ -2927,6 +2997,22 @@ struct GameCanvas: View {
                 drawLowVisibility(in: &context, size: size)
             }
             drawSubmarine(in: &context, size: size)
+            if engine.state == .playing, let leak = engine.journalLeak {
+                let age = engine.runElapsed - leak.startedAt
+                let boat = engine.screenPoint(engine.position)
+                let drift = reduceMotion ? 0 : age * 9
+                let width = min(260.0, size.width - 24)
+                let x = min(size.width - width / 2 - 12, max(width / 2 + 12, boat.x + leak.side * 24))
+                let y = max(30, boat.y - 65 - drift)
+                context.drawLayer { bubble in
+                    bubble.opacity = reduceMotion ? 1 : min(1, max(0, (3.5 - age) / 0.7))
+                    let rect = CGRect(x: x - width / 2, y: y - 26, width: width, height: 52)
+                    bubble.fill(Path(roundedRect: rect, cornerRadius: 16), with: .color(OceanPalette.ink.opacity(0.94)))
+                    bubble.stroke(Path(roundedRect: rect, cornerRadius: 16), with: .color(OceanPalette.teal.opacity(0.65)), lineWidth: 1)
+                    bubble.draw(Text(leak.phrase).font(.system(size: 13, weight: .medium)).foregroundColor(OceanPalette.teal),
+                                in: rect.insetBy(dx: 10, dy: 6))
+                }
+            }
             if engine.sonarRemaining > 0 && engine.state != .ready { drawSonar(in: &context) }
         }
         .background(OceanPalette.ink)
@@ -3672,6 +3758,7 @@ struct ContentView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
     @State private var showingMap = false
+    @State private var showingCrewJournal = false
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
     @State private var showingGarage = false
     @State private var showingJournal = false
@@ -3786,6 +3873,7 @@ struct ContentView: View {
         .onChange(of: showingGarage) { _, visible in engine.navigate(to: visible ? "Garage" : "Welcome", reason: visible ? "openGarage" : "closeGarage") }
         .onChange(of: showingJournal) { _, visible in engine.navigate(to: visible ? "Journal" : journalReturnScreen, reason: visible ? "openJournal" : "closeJournal") }
         .onChange(of: showingReplay) { _, visible in engine.navigate(to: visible ? "Replay" : journalReturnScreen, reason: visible ? "openReplay" : "closeReplay") }
+        .sheet(isPresented: $showingCrewJournal) { journalPanel }
         .sheet(isPresented: $showingGarage) { garagePanel }
         .sheet(isPresented: $showingJournal) { ExpeditionJournalView() }
         .sheet(isPresented: $showingReplay) {
@@ -3918,6 +4006,7 @@ struct ContentView: View {
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
                 bureauButton
+                crewJournalButton
                 Button {
                     garageMessage = ""
                     showingGarage = true
@@ -4319,6 +4408,39 @@ struct ContentView: View {
         .accessibilityIdentifier("openBureau")
     }
 
+    private var crewJournalButton: some View {
+        Button { showingCrewJournal = true } label: {
+            Label("Журнал экспедиции", systemImage: "book.closed")
+                .frame(maxWidth: .infinity, minHeight: 44)
+        }.accessibilityIdentifier("openCrewJournal")
+    }
+
+    private var journalPanel: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Последние 500 записей текущего запуска приложения. Реплики за бортом — выдержки из этого журнала.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if engine.crewJournal.entries.isEmpty {
+                    Text("Журнал пуст. Начните экспедицию.")
+                }
+                ForEach(engine.crewJournal.entries.reversed()) { entry in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Экспедиция \(entry.expedition) · \(Int(entry.seconds)) с · \(entry.level.rawValue)")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(entry.message).font(.headline)
+                        if let phrase = entry.crewPhrase { Text(phrase).foregroundStyle(OceanPalette.teal) }
+                        Text(entry.snapshot).font(.footnote)
+                        Text(entry.date, style: .time).font(.caption2).foregroundStyle(.secondary)
+                    }.accessibilityElement(children: .combine)
+                }
+            }
+            .navigationTitle("Бортовой журнал")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { showingCrewJournal = false } } }
+        }
+    }
+
     private var resultPanel: some View {
         let paused = engine.state == .paused
         let success = engine.state == .completed
@@ -4385,6 +4507,7 @@ struct ContentView: View {
                         .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.teal)
                         .accessibilityLabel(A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"))
                 }
+                journalButton
                 Button { showingMap = false; engine.returnToMenu() } label: {
                     Text("На поверхность").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 }
