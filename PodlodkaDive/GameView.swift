@@ -13,6 +13,8 @@ struct GameView: View {
     @State private var showingMap = false
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
     @State private var showingGarage = false
+    @State private var showingJournal = false
+    @State private var showingReplay = false
     @State private var pendingStyle: SubmarineStyle?
     @State private var garageMessage = ""
 
@@ -84,7 +86,17 @@ struct GameView: View {
         .onChange(of: dynamicTypeSize) { _, _ in engine.setSteering(.zero) }
         .onChange(of: voiceOverEnabled) { _, _ in engine.setSteering(.zero) }
         .onChange(of: voiceOverButtons) { _, _ in engine.setSteering(.zero) }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { engine.pause() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                engine.pause()
+                let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Expedition flush")
+                Task {
+                    await engine.flushJournal()
+                    if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask) }
+                }
+            }
+        }
+        .onChange(of: showingMap) { _, visible in engine.navigate(to: visible ? "Map" : (engine.state == .playing ? "Game" : "Pause"), reason: visible ? "openMap" : "closeMap") }
         .sensoryFeedback(.selection, trigger: engine.pickupCount)
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.warning, trigger: engine.eventCount)
@@ -104,8 +116,35 @@ struct GameView: View {
             focusedControl = destination
             if showingMap { announcer.describeMap() }
         }
+        .onChange(of: showingGarage) { _, visible in engine.navigate(to: visible ? "Garage" : "Welcome", reason: visible ? "openGarage" : "closeGarage") }
+        .onChange(of: showingJournal) { _, visible in engine.navigate(to: visible ? "Journal" : journalReturnScreen, reason: visible ? "openJournal" : "closeJournal") }
+        .onChange(of: showingReplay) { _, visible in engine.navigate(to: visible ? "Replay" : journalReturnScreen, reason: visible ? "openReplay" : "closeReplay") }
         .sheet(isPresented: $showingGarage) { garagePanel }
+        .sheet(isPresented: $showingJournal) { ExpeditionJournalView() }
+        .sheet(isPresented: $showingReplay) {
+            if let id = engine.expeditionId {
+                NavigationStack {
+                    ExpeditionReplayView(expeditionId: id)
+                        .toolbar { Button("Закрыть") { showingReplay = false } }
+                }
+            }
+        }
 
+    }
+
+    private var journalReturnScreen: String {
+        switch engine.state {
+        case .ready: "Welcome"
+        case .playing: "Game"
+        case .paused: showingMap ? "Map" : "Pause"
+        case .completed, .gameOver: "Result"
+        }
+    }
+
+    private var journalButton: some View {
+        Button("Журнал экспедиций") {
+            Task { await engine.flushJournal(); showingJournal = true }
+        }.accessibilityIdentifier("openJournal").padding(8)
     }
 
     private func largeTextInstruments(insets: EdgeInsets) -> some View {
@@ -138,6 +177,7 @@ struct GameView: View {
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
         VStack(spacing: 0) {
+            journalButton
             (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())) {
                 brand
                 Spacer()
@@ -408,7 +448,7 @@ struct GameView: View {
     }
 
     private func openMap() {
-        engine.pause()
+        engine.pauseForScreen("Map")
         showingMap = true
     }
 
@@ -613,6 +653,11 @@ struct GameView: View {
             }
             .padding(.vertical, 16).background(OceanPalette.teal.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
             VStack(spacing: 12) {
+                journalButton
+                if !paused {
+                    Button("Реплей") { Task { await engine.flushJournal(); showingReplay = true } }
+                        .accessibilityIdentifier("resultReplay")
+                }
                 Button {
                     if paused { engine.togglePause() } else { engine.startGame() }
                 } label: {
