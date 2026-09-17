@@ -3,6 +3,9 @@ import UIKit
 import Combine
 
 struct GameView: View {
+    @StateObject private var recovery: ExpeditionRecovery
+    @State private var showingEvents = false
+    @State private var confirmNewGame = false
     @StateObject private var engine: GameEngine
     @StateObject private var recorder: BlackBoxRecorder
     @StateObject private var captain = CaptainNote()
@@ -28,6 +31,9 @@ struct GameView: View {
 
     init(engine: GameEngine = GameEngine()) {
         let arguments = ProcessInfo.processInfo.arguments
+        let recovery = ExpeditionRecovery(engine: engine)
+        engine.recovery = recovery
+        _recovery = StateObject(wrappedValue: recovery)
         _engine = StateObject(wrappedValue: engine)
         _recorder = StateObject(wrappedValue: BlackBoxRecorder(engine: engine))
         _showingMap = State(initialValue: arguments.contains("map"))
@@ -83,10 +89,30 @@ struct GameView: View {
                     engine.prepareAccessibilityAuditState(arguments[marker + 1])
                 }
 #endif
+                ReturnInbox.shared.connect { url, event in openReturnURL(url, eventID: event) }
                 engine.startLoop()
             }
             .onDisappear { engine.stopLoop() }
             .onChange(of: proxy.size) { _, size in engine.resize(to: size) }
+        }
+        .onOpenURL { openReturnURL($0) }
+        .sheet(isPresented: $showingEvents, onDismiss: { focusedControl = "openEvents" }) {
+            ReturnEventsView(recovery: recovery) { openReturnURL($0) }
+        }
+        .onChange(of: showingEvents) { _, visible in engine.navigate(to: visible ? "Events" : journalReturnScreen, reason: "events") }
+        .alert("Возвращение в экспедицию", isPresented: Binding(get: { recovery.message != nil }, set: { if !$0 { recovery.message = nil } })) {
+            Button("Понятно") { recovery.message = nil }
+        } message: { Text(recovery.message ?? "") }
+        .confirmationDialog("Заменить активную экспедицию сохранённой?", isPresented: Binding(get: { recovery.replacement != nil }, set: { if !$0 { recovery.replacement = nil } })) {
+            Button("Открыть сохранение", role: .destructive) {
+                if let route = recovery.replacement { recovery.open(route.url, confirmed: true) }
+                recovery.replacement = nil
+            }
+            Button("Отмена", role: .cancel) { recovery.replacement = nil }
+        }
+        .confirmationDialog("Начать новую экспедицию? Сохранение будет удалено.", isPresented: $confirmNewGame) {
+            Button("Начать новую", role: .destructive) { engine.startGame() }
+            Button("Отмена", role: .cancel) { }
         }
         .ignoresSafeArea()
         .statusBarHidden()
@@ -99,6 +125,7 @@ struct GameView: View {
             if phase != .active {
                 captain.finish(recorder: recorder)
                 engine.pause()
+                if phase == .background { recovery.save(exiting: true) }
                 engine.captainLogger.flush()
                 let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Expedition flush")
                 Task {
@@ -146,6 +173,20 @@ struct GameView: View {
         .onChange(of: showingBlackBox) { _, value in recorder.flow(value ? "journal" : String(describing: engine.state)) }
         .onChange(of: engine.state) { _, state in if state != .playing { captain.finish(recorder: recorder) } }
 
+    }
+
+    private func openReturnURL(_ url: URL, eventID: UUID? = nil) {
+        showingMap = false
+        showingEvents = false
+        showingArchives = false
+        showingGarage = false
+        showingJournal = false
+        showingReplay = false
+        showingBureau = false
+        showingCaptainJournal = false
+        showingBlackBox = false
+        showingCrewJournal = false
+        recovery.open(url, pushEventID: eventID)
     }
 
     private var journalReturnScreen: String {
@@ -290,6 +331,17 @@ struct GameView: View {
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
+                if let id = recovery.savedID {
+                    Button("Продолжить") { openReturnURL(ReturnRoute(id: id).url) }
+                        .buttonStyle(DiveButtonStyle())
+                        .accessibilityIdentifier("continueExpedition")
+                        .accessibilityHint("Восстанавливает незавершённую экспедицию на паузе")
+                }
+                Button("События") { showingEvents = true }
+                    .frame(minHeight: 44).foregroundStyle(.white)
+                    .accessibilityIdentifier("openEvents")
+                    .accessibilityHint("История сохранений, напоминаний и важных событий")
+                    .accessibilityFocused($focusedControl, equals: "openEvents")
                 journalButton
                 Button {
                     garageMessage = ""
@@ -303,7 +355,7 @@ struct GameView: View {
                 .buttonStyle(.plain).foregroundStyle(OceanPalette.white)
                 Button {
                     showingMap = false
-                    engine.startGame()
+                    if recovery.savedID != nil { confirmNewGame = true } else { engine.startGame() }
                 } label: {
                     HStack { Spacer(); Text("Начать экспедицию"); Spacer(); Image(systemName: "arrow.right") }
                 }

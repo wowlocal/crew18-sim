@@ -9,6 +9,7 @@ import Speech
 import SwiftData
 import SwiftUI
 import UIKit
+import UserNotifications
 
 // MARK: - ExpeditionLog.swift
 
@@ -1589,18 +1590,18 @@ struct ExpeditionMap: View {
 
 // MARK: - GameEngine.swift
 
-enum RunState: Equatable { case ready, playing, paused, gameOver, completed }
-enum FailureReason { case hull, energy }
-enum PickupKind: String { case battery, shield, sample, blackBox, crystal }
-enum MinePhase { case idle, armed, exploding, spent }
-enum DiveZone: Equatable { case ocean, bossCave }
-enum BossStrikePhase { case warning, impact }
+enum RunState: Codable, Equatable { case ready, playing, paused, gameOver, completed }
+enum FailureReason: Codable { case hull, energy }
+enum PickupKind: String, Codable { case battery, shield, sample, blackBox, crystal }
+enum MinePhase: Codable { case idle, armed, exploding, spent }
+enum DiveZone: Codable, Equatable { case ocean, bossCave }
+enum BossStrikePhase: Codable { case warning, impact }
 
-struct OceanPortal {
+struct OceanPortal: Codable {
     let position: CGPoint
 }
 
-struct BossStrike {
+struct BossStrike: Codable {
     let position: CGPoint
     var phase: BossStrikePhase = .warning
     var timer: TimeInterval
@@ -1713,14 +1714,14 @@ private struct GarageSave: Codable {
     var selected: SubmarineStyle = .classic
 }
 
-struct OceanPickup: Identifiable {
+struct OceanPickup: Identifiable, Codable {
     let id: Int
     let kind: PickupKind
     let position: CGPoint
     var collected = false
 }
 
-struct OceanMine: Identifiable {
+struct OceanMine: Identifiable, Codable {
     let id: Int
     let position: CGPoint
     var phase: MinePhase = .idle
@@ -1730,7 +1731,7 @@ struct OceanMine: Identifiable {
     static let fuse: TimeInterval = 1.25
 }
 
-struct OceanCurrent: Identifiable {
+struct OceanCurrent: Identifiable, Codable {
     let id: Int
     let bounds: CGRect
     let velocity: CGVector
@@ -1741,7 +1742,7 @@ struct RockContact {
     let penetration: CGFloat
 }
 
-struct OceanRock: Identifiable {
+struct OceanRock: Identifiable, Codable {
     let id: Int
     let vertices: [CGPoint]
 
@@ -1788,7 +1789,7 @@ struct OceanRock: Identifiable {
     }
 }
 
-struct OceanLevel {
+struct OceanLevel: Codable {
     let size: CGSize
     let spawn: CGPoint
     let base: CGPoint
@@ -2067,7 +2068,7 @@ final class GameEngine: NSObject, ObservableObject {
     var crystals: Int { garage.crystals }
     var selectedStyle: SubmarineStyle { garage.selected }
 
-    let level: OceanLevel
+    private(set) var level: OceanLevel
     private(set) var viewport = CGSize(width: 390, height: 844)
     private(set) var position: CGPoint
     private(set) var velocity = CGVector.zero
@@ -2294,7 +2295,143 @@ final class GameEngine: NSObject, ObservableObject {
         objectWillChange.send()
     }
 
+
+    var recovery: ExpeditionRecovery?
+    private var pausedSnapshot: ExpeditionSnapshot?
+    private var restoredPause = false
+
+    func snapshot() -> ExpeditionSnapshot {
+        if state == .paused, let pausedSnapshot { return pausedSnapshot }
+        return ExpeditionSnapshot(id: expeditionID,
+            level: level,
+            position: position,
+            velocity: velocity,
+            steering: steering,
+            camera: camera,
+            facing: facing,
+            energy: energy,
+            hull: hull,
+            hasShield: hasShield,
+            hasBlackBox: hasBlackBox,
+            samples: samples,
+            score: score,
+            bestAtStart: bestAtStart,
+            runElapsed: runElapsed,
+            distance: distance,
+            pickups: pickups,
+            mines: mines,
+            revealedPickups: revealedPickups,
+            trail: trail,
+            notice: notice,
+            failureReason: failureReason,
+            zone: zone,
+            portal: portal,
+            portalRevealed: portalRevealed,
+            bossStrike: bossStrike,
+            bossDefeated: bossDefeated,
+            bossReward: bossReward,
+            boostDirection: boostDirection,
+            portalReturnPosition: portalReturnPosition,
+            announcedCriticalHull: announcedCriticalHull,
+            announcedDockingHint: announcedDockingHint,
+            dockingTooFast: dockingTooFast,
+            didWarnEnergy: didWarnEnergy,
+            summaryTicks: summaryTicks,
+            pickupCount: pickupCount,
+            damageCount: damageCount,
+            eventCount: eventCount,
+            elapsed: elapsed,
+            expeditionNumber: expeditionNumber,
+            leakOnLeft: leakOnLeft,
+            boostRemaining: boostRemaining,
+            boostCooldown: boostCooldown,
+            lightBoostRemaining: lightBoostRemaining,
+            lightBoostCooldown: lightBoostCooldown,
+            sonarRemaining: sonarRemaining,
+            sonarCooldown: sonarCooldown,
+            invulnerability: invulnerability,
+            noticeRemaining: noticeRemaining,
+            bossTimeRemaining: bossTimeRemaining,
+            accessibilityMoveRemaining: accessibilityMoveRemaining,
+            bossStrikeCooldown: bossStrikeCooldown,
+            accumulator: accumulator,
+            nextLeakAt: nextLeakAt,
+            nextSnapshotAt: nextSnapshotAt,
+            nextSnapshot: nextSnapshot)
+    }
+
+    func restore(_ saved: ExpeditionSnapshot) {
+        pausedSnapshot = nil
+        restoredPause = true
+        level = saved.level
+        position = saved.position
+        velocity = saved.velocity
+        steering = saved.steering
+        camera = saved.camera
+        facing = saved.facing
+        energy = saved.energy
+        hull = saved.hull
+        hasShield = saved.hasShield
+        hasBlackBox = saved.hasBlackBox
+        samples = saved.samples
+        score = saved.score
+        bestAtStart = saved.bestAtStart
+        runElapsed = saved.runElapsed
+        distance = saved.distance
+        pickups = saved.pickups
+        mines = saved.mines
+        revealedPickups = saved.revealedPickups
+        trail = saved.trail
+        notice = saved.notice
+        failureReason = saved.failureReason
+        zone = saved.zone
+        portal = saved.portal
+        portalRevealed = saved.portalRevealed
+        bossStrike = saved.bossStrike
+        bossDefeated = saved.bossDefeated
+        bossReward = saved.bossReward
+        boostDirection = saved.boostDirection
+        portalReturnPosition = saved.portalReturnPosition
+        announcedCriticalHull = saved.announcedCriticalHull
+        announcedDockingHint = saved.announcedDockingHint
+        dockingTooFast = saved.dockingTooFast
+        didWarnEnergy = saved.didWarnEnergy
+        summaryTicks = saved.summaryTicks
+        pickupCount = saved.pickupCount
+        damageCount = saved.damageCount
+        eventCount = saved.eventCount
+        elapsed = saved.elapsed
+        expeditionNumber = saved.expeditionNumber
+        leakOnLeft = saved.leakOnLeft
+        boostRemaining = saved.boostRemaining
+        boostCooldown = saved.boostCooldown
+        lightBoostRemaining = saved.lightBoostRemaining
+        lightBoostCooldown = saved.lightBoostCooldown
+        sonarRemaining = saved.sonarRemaining
+        sonarCooldown = saved.sonarCooldown
+        invulnerability = saved.invulnerability
+        noticeRemaining = saved.noticeRemaining
+        bossTimeRemaining = saved.bossTimeRemaining
+        accessibilityMoveRemaining = saved.accessibilityMoveRemaining
+        bossStrikeCooldown = saved.bossStrikeCooldown
+        accumulator = saved.accumulator
+        nextLeakAt = saved.nextLeakAt
+        nextSnapshotAt = saved.nextSnapshotAt
+        nextSnapshot = saved.nextSnapshot
+        expeditionID = saved.id
+        expeditionId = saved.id.uuidString
+        diveID = saved.id
+        telemetryOpen = true
+        journalOpen = true
+        previousTimestamp = nil
+        events.send(.runStarted(saved.id))
+        state = .paused
+        navigate(to: "Pause", reason: "restore")
+    }
+
     func startGame() {
+        recovery?.deleteSave()
+        pausedSnapshot = nil
         if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "restart") }
         lastSnapshotTime = -1
         lastSteeringTime = -1
@@ -2361,9 +2498,10 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func returnToMenu() {
+        guard recovery?.save(exiting: true) != false else { pause(); return }
         navigate(to: "Welcome", reason: "surface")
-        if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "surface") }
-        closeJournal("Экспедиция прервана: возвращение в меню")
+        if state == .playing || state == .paused { endJournal(result: recovery == nil ? "abandoned" : "suspended", reason: "surface") }
+        closeJournal(recovery == nil ? "Экспедиция прервана: возвращение в меню" : "Экспедиция сохранена: возвращение в меню")
         log("Возвращение в меню")
         journalLeak = nil
         steering = .zero
@@ -2492,6 +2630,9 @@ final class GameEngine: NSObject, ObservableObject {
 
     func pauseForScreen(_ screen: String) {
         guard state == .playing else { return }
+        restoredPause = false
+        pausedSnapshot = snapshot()
+        recovery?.save(exiting: false)
         steering = .zero
         accessibilityMoveRemaining = 0
         state = .paused
@@ -2505,9 +2646,10 @@ final class GameEngine: NSObject, ObservableObject {
 
     func togglePause() {
         if state == .paused {
-            steering = .zero
-            accessibilityMoveRemaining = 0
-            accumulator = 0
+            recovery?.cancelReminders()
+            pausedSnapshot = nil
+            if !restoredPause { accumulator = 0 }
+            restoredPause = false
             previousTimestamp = nil
             state = .playing
             journal("resume")
@@ -2882,6 +3024,7 @@ final class GameEngine: NSObject, ObservableObject {
                 announce(A11yL10n.text("event.sample", defaultValue: "Образец на борту. Плюс 75 к добыче"))
             case .blackBox:
                 hasBlackBox = true
+                recovery?.record("blackBox", title: "Чёрный ящик найден", text: "Возвращайтесь на базу.")
                 journal("target", ["newTarget": "base"])
                 events.send(.objectiveChanged(true))
                 announce(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!"), duration: 6)
@@ -2978,6 +3121,8 @@ final class GameEngine: NSObject, ObservableObject {
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         guard state == .playing else { return }
+        recovery?.record(success ? "completed" : "gameOver", title: success ? "Экспедиция завершена" : "Экспедиция потеряна", text: "История сохранена. Продолжение недоступно.")
+        recovery?.deleteSave()
         defer {
             if success { journal("docking") }
             journal(success ? "completed" : "gameOver")
@@ -3023,6 +3168,375 @@ private final class DisplayLinkTarget: NSObject {
     weak var engine: GameEngine?
     init(engine: GameEngine) { self.engine = engine }
     @objc func tick(_ link: CADisplayLink) { engine?.frameDidFire(link) }
+}
+
+struct ExpeditionSnapshot: Codable {
+    var version = 1
+    var id: UUID
+    var level: OceanLevel
+    var position: CGPoint
+    var velocity: CGVector
+    var steering: CGVector
+    var camera: CGPoint
+    var facing: CGFloat
+    var energy: CGFloat
+    var hull: Int
+    var hasShield: Bool
+    var hasBlackBox: Bool
+    var samples: Int
+    var score: Int
+    var bestAtStart: Int
+    var runElapsed: TimeInterval
+    var distance: CGFloat
+    var pickups: [OceanPickup]
+    var mines: [OceanMine]
+    var revealedPickups: Set<Int>
+    var trail: [CGPoint]
+    var notice: String
+    var failureReason: FailureReason
+    var zone: DiveZone
+    var portal: OceanPortal?
+    var portalRevealed: Bool
+    var bossStrike: BossStrike?
+    var bossDefeated: Bool
+    var bossReward: Int
+    var boostDirection: CGVector
+    var portalReturnPosition: CGPoint
+    var announcedCriticalHull: Bool
+    var announcedDockingHint: Bool
+    var dockingTooFast: Bool
+    var didWarnEnergy: Bool
+    var summaryTicks: Int
+    var pickupCount: Int
+    var damageCount: Int
+    var eventCount: Int
+    var elapsed: TimeInterval
+    var expeditionNumber: Int
+    var leakOnLeft: Bool
+    var boostRemaining: TimeInterval
+    var boostCooldown: TimeInterval
+    var lightBoostRemaining: TimeInterval
+    var lightBoostCooldown: TimeInterval
+    var sonarRemaining: TimeInterval
+    var sonarCooldown: TimeInterval
+    var invulnerability: TimeInterval
+    var noticeRemaining: TimeInterval
+    var bossTimeRemaining: TimeInterval
+    var accessibilityMoveRemaining: TimeInterval
+    var bossStrikeCooldown: TimeInterval
+    var accumulator: TimeInterval
+    var nextLeakAt: TimeInterval
+    var nextSnapshotAt: TimeInterval
+    var nextSnapshot: TimeInterval
+}
+
+// MARK: - ExpeditionRecovery.swift
+
+struct ReturnRoute: Equatable {
+    let id: UUID
+    var url: URL { URL(string: "podlodkadive://expedition/\(id.uuidString)")! }
+    init(id: UUID) { self.id = id }
+    init?(url: URL) {
+        guard url.scheme?.lowercased() == "podlodkadive", url.host == "expedition",
+              url.pathComponents.count == 2, url.query == nil, url.fragment == nil,
+              let id = UUID(uuidString: url.lastPathComponent) else { return nil }
+        self.id = id
+    }
+}
+
+struct ReturnEvent: Codable, Identifiable {
+    let id: UUID
+    let expedition: UUID?
+    let date: Date
+    let kind: String
+    let title: String
+    let text: String
+    var sourceEventID: UUID? = nil
+    var read = false
+    var isNotification: Bool { kind.hasPrefix("push") }
+}
+
+@MainActor
+protocol ReminderClient {
+    func authorize() async throws -> Bool
+    func replace(_ requests: [UNNotificationRequest]) async throws
+    func cancel()
+}
+
+final class LocalReminderClient: ReminderClient {
+    static let identifiers = ["expedition.return.1", "expedition.return.7"]
+    let center = UNUserNotificationCenter.current()
+    func authorize() async throws -> Bool {
+        try await center.requestAuthorization(options: [.alert, .sound, .badge])
+    }
+    func replace(_ requests: [UNNotificationRequest]) async throws {
+        cancel()
+        do { for request in requests { try await center.add(request) } }
+        catch { cancel(); throw error }
+    }
+    func cancel() {
+        center.removePendingNotificationRequests(withIdentifiers: Self.identifiers)
+        center.removeDeliveredNotifications(withIdentifiers: Self.identifiers)
+    }
+}
+
+struct ReminderPlan {
+    static func requests(id: UUID, eventID: UUID, now: Date, calendar: Calendar) -> [UNNotificationRequest] {
+        [1, 7].compactMap { days in
+            guard let date = calendar.date(byAdding: .day, value: days, to: now) else { return nil }
+            let content = UNMutableNotificationContent()
+            content.title = "Экспедиция ждёт капитана"
+            content.body = "Продолжите сохранённое погружение. Игра откроется на паузе."
+            content.sound = .default
+            content.userInfo = ["url": ReturnRoute(id: id).url.absoluteString, "eventID": eventID.uuidString]
+            // Floating calendar components preserve local wall time after time-zone changes.
+            let components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+            return UNNotificationRequest(identifier: "expedition.return.\(days)", content: content,
+                trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
+        }
+    }
+}
+
+/// Installed before SwiftUI creates its root. Pending routes survive cold-start ordering.
+@MainActor
+final class ReturnInbox: ObservableObject {
+    static let shared = ReturnInbox()
+    @Published var pending: URL?
+    var opened: ((URL, UUID?) -> Void)?
+    func receive(_ url: URL, eventID: UUID? = nil) {
+        if let opened { opened(url, eventID) } else { pending = url; pendingEventID = eventID }
+    }
+    private var pendingEventID: UUID?
+    func connect(_ handler: @escaping (URL, UUID?) -> Void) {
+        opened = handler
+        if let pending { handler(pending, pendingEventID); self.pending = nil; pendingEventID = nil }
+    }
+}
+
+final class ReturnNotificationDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        if let raw = info["url"] as? String, let url = URL(string: raw) {
+            let eventID = (info["eventID"] as? String).flatMap(UUID.init(uuidString:))
+            Task { @MainActor in ReturnInbox.shared.receive(url, eventID: eventID) }
+        }
+        completionHandler()
+    }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound])
+    }
+}
+
+@MainActor
+final class ExpeditionRecovery: ObservableObject {
+    @Published private(set) var savedID: UUID?
+    @Published private(set) var history: [ReturnEvent] = []
+    @Published var message: String?
+    @Published var replacement: ReturnRoute?
+    private weak var engine: GameEngine?
+    private let directory: URL
+    private let client: any ReminderClient
+    private let now: () -> Date
+    private let calendar: () -> Calendar
+    private var generation = UUID()
+    private var operations: Task<Void, Never>?
+    private var resumedID: UUID?
+    private var exited = false
+    private var remindersPending = false
+    private var saveURL: URL { directory.appendingPathComponent("expedition.json") }
+    private var eventsURL: URL { directory.appendingPathComponent("events.json") }
+
+    init(engine: GameEngine, directory: URL? = nil, client: any ReminderClient = LocalReminderClient(),
+         now: @escaping () -> Date = Date.init, calendar: @escaping () -> Calendar = { .current }) {
+        self.engine = engine
+        self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("ExpeditionReturn")
+        self.client = client; self.now = now; self.calendar = calendar
+        do {
+            try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: eventsURL.path) {
+                history = try JSONDecoder().decode([ReturnEvent].self, from: Data(contentsOf: eventsURL))
+            }
+        } catch { message = "Не удалось прочитать историю событий." }
+        remindersPending = history.first { ["pushScheduled", "pushCancelled", "pushError"].contains($0.kind) }?.kind == "pushScheduled"
+        if FileManager.default.fileExists(atPath: saveURL.path) {
+            do { savedID = try load().id }
+            catch { failure(); deleteSave() }
+        } else { client.cancel() }
+    }
+
+    func load() throws -> ExpeditionSnapshot {
+        let data = try Data(contentsOf: saveURL)
+        guard data.count <= 5_000_000 else { throw RecoveryError.corrupt }
+        // Bound all numeric payloads before any engine conversion to Int or geometry math.
+        func validNumbers(_ value: Any) -> Bool {
+            if let number = value as? NSNumber { return number.doubleValue.isFinite && abs(number.doubleValue) <= 1_000_000_000 }
+            if let values = value as? [Any] { return values.allSatisfy(validNumbers) }
+            if let values = value as? [String: Any] { return values.values.allSatisfy(validNumbers) }
+            return true
+        }
+        guard validNumbers(try JSONSerialization.jsonObject(with: data)) else { throw RecoveryError.corrupt }
+        struct Header: Decodable { let version: Int }
+        guard try JSONDecoder().decode(Header.self, from: data).version == 1 else { throw RecoveryError.version }
+        let save = try JSONDecoder().decode(ExpeditionSnapshot.self, from: data)
+        guard !history.contains(where: { $0.expedition == save.id && ["completed", "gameOver", "saveDeleted"].contains($0.kind) }) else { throw RecoveryError.corrupt }
+        guard save.hull > 0, save.hull <= 3, save.energy > 0, save.energy <= 100,
+              save.level.size.width > 0, save.level.size.height > 0,
+              save.samples >= 0, save.samples <= save.level.pickups.count, save.runElapsed >= 0,
+              Set(save.pickups.map(\.id)).count == save.pickups.count,
+              Set(save.mines.map(\.id)).count == save.mines.count else { throw RecoveryError.corrupt }
+        return save
+    }
+    enum RecoveryError: Error { case version, corrupt }
+
+    @discardableResult
+    func save(exiting: Bool) -> Bool {
+        guard let engine, engine.state == .playing || engine.state == .paused else { return true }
+        if exiting && exited { return true }
+        do {
+            let snapshot = engine.snapshot()
+            try JSONEncoder().encode(snapshot).write(to: saveURL, options: .atomic)
+            savedID = snapshot.id
+            record("save", title: "Экспедиция сохранена", text: "Положение, груз и состояние океана сохранены.")
+            if exiting { exited = true; schedule(id: snapshot.id) }
+            return true
+        } catch { message = "Не удалось сохранить экспедицию. Повторите попытку."; return false }
+    }
+
+    func record(_ kind: String, title: String, text: String, id: UUID = UUID(), expedition: UUID? = nil, sourceEventID: UUID? = nil) {
+        guard !history.contains(where: { $0.id == id }) else { return }
+        let run = expedition ?? engine?.expeditionId.flatMap(UUID.init(uuidString:)) ?? savedID
+        history.insert(ReturnEvent(id: id, expedition: run, date: now(), kind: kind, title: title, text: text, sourceEventID: sourceEventID), at: 0)
+        engine?.captainLogger.record(kind, message: title, expedition: run ?? id, sobriety: .sober,
+                                     details: ["domainEventID": id.uuidString])
+        persistHistory()
+    }
+    private func persistHistory() {
+        do { try JSONEncoder().encode(history).write(to: eventsURL, options: .atomic) }
+        catch { message = "Не удалось сохранить историю событий." }
+    }
+    func markRead(_ id: UUID) {
+        guard let index = history.firstIndex(where: { $0.id == id }) else { return }
+        history[index].read.toggle(); persistHistory()
+    }
+    enum Filter: String, CaseIterable { case all = "Все", unread = "Непрочитанные", notifications = "Уведомления" }
+    func events(_ filter: Filter) -> [ReturnEvent] {
+        history.filter { filter == .all || (filter == .unread ? !$0.read : $0.isNotification) }
+    }
+    func canOpen(_ event: ReturnEvent) -> Bool { event.expedition != nil && event.expedition == savedID }
+
+    private func schedule(id: UUID) {
+        generation = UUID()
+        remindersPending = true
+        let token = generation, date = now(), cal = calendar(), eventID = UUID()
+        let prior = operations
+        operations = Task { [weak self] in
+            await prior?.value
+            guard let self, self.generation == token else { return }
+            do {
+                self.client.cancel()
+                guard try await self.client.authorize() else {
+                    if self.generation == token { self.remindersPending = false }
+                    return
+                }
+                guard self.generation == token else { return }
+                try await self.client.replace(ReminderPlan.requests(id: id, eventID: eventID, now: date, calendar: cal))
+                guard self.generation == token else { self.client.cancel(); return }
+                self.record("pushScheduled", title: "Напоминания включены", text: "Завтра и через неделю в это же местное время.", id: eventID, expedition: id)
+            } catch {
+                guard self.generation == token else { return }
+                self.remindersPending = false
+                self.record("pushError", title: "Напоминания недоступны", text: "Сохранение можно открыть кнопкой «Продолжить».", expedition: id)
+            }
+        }
+    }
+    func cancelReminders() {
+        generation = UUID(); client.cancel(); exited = false
+        let prior = operations
+        operations = Task { [client] in await prior?.value; client.cancel() }
+        if remindersPending, let id = savedID {
+            record("pushCancelled", title: "Напоминания отменены", text: "Оставшиеся напоминания этой экспедиции отменены.", expedition: id)
+        }
+        remindersPending = false
+    }
+    func settle() async { await operations?.value }
+    func deleteSave() {
+        cancelReminders()
+        if let savedID { record("saveDeleted", title: "Сохранение удалено", text: "История экспедиции остаётся доступной.", expedition: savedID) }
+        do {
+            if FileManager.default.fileExists(atPath: saveURL.path) { try FileManager.default.removeItem(at: saveURL) }
+            savedID = nil; resumedID = nil
+        } catch { message = "Не удалось удалить сохранение." }
+    }
+    private func failure() {
+        message = "Сохранение отсутствует, повреждено или несовместимо. Начните новую экспедицию на главном экране."
+        record("restoreError", title: "Не удалось продолжить", text: message!)
+    }
+    func open(_ url: URL, pushEventID: UUID? = nil, confirmed: Bool = false) {
+        guard let route = ReturnRoute(url: url), let engine else { failure(); return }
+        if let pushEventID {
+            if let index = history.firstIndex(where: { $0.id == pushEventID }) { history[index].read = true; persistHistory() }
+            if !history.contains(where: { $0.kind == "pushOpened" && $0.sourceEventID == pushEventID }) {
+                record("pushOpened", title: "Напоминание открыто", text: "Открываем сохранённую экспедицию.", expedition: route.id, sourceEventID: pushEventID)
+            }
+        }
+        do {
+            let snapshot = try load()
+            guard snapshot.id == route.id else { failure(); return }
+            let active = engine.state == .playing || engine.state == .paused
+            if active && engine.expeditionId == route.id.uuidString {
+                if resumedID != route.id { engine.pause(); cancelReminders(); resumedID = route.id }
+                return
+            }
+            if active && !confirmed { replacement = route; return }
+            engine.restore(snapshot); resumedID = route.id; exited = false
+            cancelReminders()
+            record("restore", title: "Экспедиция восстановлена", text: "Игра на паузе. Продолжите, когда будете готовы.")
+        } catch {
+            failure()
+            if savedID == route.id { deleteSave() }
+            if engine.state != .playing && engine.state != .paused { engine.returnToMenu() }
+        }
+    }
+}
+
+struct ReturnEventsView: View {
+    @ObservedObject var recovery: ExpeditionRecovery
+    let open: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var filter: ExpeditionRecovery.Filter = .all
+    @AccessibilityFocusState private var titleFocused: Bool
+    var body: some View {
+        NavigationStack {
+            List {
+                Button("Готово") { dismiss() }.font(.body).frame(minHeight: 44).accessibilityIdentifier("closeEvents")
+                Picker("Фильтр событий", selection: $filter) {
+                    ForEach(ExpeditionRecovery.Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }.accessibilityIdentifier("eventFilter").accessibilityFocused($titleFocused)
+                if recovery.events(filter).isEmpty { Text("Нет событий").accessibilityIdentifier("emptyEvents") }
+                ForEach(recovery.events(filter)) { event in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(event.title).font(.headline)
+                        Text(event.date, format: .dateTime.day().month().year().hour().minute())
+                        Text(event.text)
+                        Button(event.read ? "Прочитано · отметить непрочитанным" : "Не прочитано · отметить прочитанным") { recovery.markRead(event.id) }
+                            .accessibilityHint("Меняет статус этого события")
+                        if recovery.canOpen(event), let id = event.expedition {
+                            Button("Открыть экспедицию") { dismiss(); open(ReturnRoute(id: id).url) }
+                                .accessibilityHint("Открывает сохранение на паузе")
+                        }
+                    }.padding(.vertical, 4)
+                }
+            }
+            .navigationTitle("События")
+            .onAppear { titleFocused = true }
+        }
+    }
 }
 
 // MARK: - GameCanvas.swift
@@ -3811,6 +4325,9 @@ final class VoiceOverAnnouncer: ObservableObject {
 // MARK: - GameView.swift
 
 struct ContentView: View {
+    @StateObject private var recovery: ExpeditionRecovery
+    @State private var showingEvents = false
+    @State private var confirmNewGame = false
     @StateObject private var engine: GameEngine
     @StateObject private var recorder: BlackBoxRecorder
     @StateObject private var captain = CaptainNote()
@@ -3836,6 +4353,9 @@ struct ContentView: View {
 
     init(engine: GameEngine = GameEngine()) {
         let arguments = ProcessInfo.processInfo.arguments
+        let recovery = ExpeditionRecovery(engine: engine)
+        engine.recovery = recovery
+        _recovery = StateObject(wrappedValue: recovery)
         _engine = StateObject(wrappedValue: engine)
         _recorder = StateObject(wrappedValue: BlackBoxRecorder(engine: engine))
         _showingMap = State(initialValue: arguments.contains("map"))
@@ -3891,10 +4411,30 @@ struct ContentView: View {
                     engine.prepareAccessibilityAuditState(arguments[marker + 1])
                 }
 #endif
+                ReturnInbox.shared.connect { url, event in openReturnURL(url, eventID: event) }
                 engine.startLoop()
             }
             .onDisappear { engine.stopLoop() }
             .onChange(of: proxy.size) { _, size in engine.resize(to: size) }
+        }
+        .onOpenURL { openReturnURL($0) }
+        .sheet(isPresented: $showingEvents, onDismiss: { focusedControl = "openEvents" }) {
+            ReturnEventsView(recovery: recovery) { openReturnURL($0) }
+        }
+        .onChange(of: showingEvents) { _, visible in engine.navigate(to: visible ? "Events" : journalReturnScreen, reason: "events") }
+        .alert("Возвращение в экспедицию", isPresented: Binding(get: { recovery.message != nil }, set: { if !$0 { recovery.message = nil } })) {
+            Button("Понятно") { recovery.message = nil }
+        } message: { Text(recovery.message ?? "") }
+        .confirmationDialog("Заменить активную экспедицию сохранённой?", isPresented: Binding(get: { recovery.replacement != nil }, set: { if !$0 { recovery.replacement = nil } })) {
+            Button("Открыть сохранение", role: .destructive) {
+                if let route = recovery.replacement { recovery.open(route.url, confirmed: true) }
+                recovery.replacement = nil
+            }
+            Button("Отмена", role: .cancel) { recovery.replacement = nil }
+        }
+        .confirmationDialog("Начать новую экспедицию? Сохранение будет удалено.", isPresented: $confirmNewGame) {
+            Button("Начать новую", role: .destructive) { engine.startGame() }
+            Button("Отмена", role: .cancel) { }
         }
         .ignoresSafeArea()
         .statusBarHidden()
@@ -3907,6 +4447,7 @@ struct ContentView: View {
             if phase != .active {
                 captain.finish(recorder: recorder)
                 engine.pause()
+                if phase == .background { recovery.save(exiting: true) }
                 engine.captainLogger.flush()
                 let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Expedition flush")
                 Task {
@@ -3954,6 +4495,20 @@ struct ContentView: View {
         .onChange(of: showingBlackBox) { _, value in recorder.flow(value ? "journal" : String(describing: engine.state)) }
         .onChange(of: engine.state) { _, state in if state != .playing { captain.finish(recorder: recorder) } }
 
+    }
+
+    private func openReturnURL(_ url: URL, eventID: UUID? = nil) {
+        showingMap = false
+        showingEvents = false
+        showingArchives = false
+        showingGarage = false
+        showingJournal = false
+        showingReplay = false
+        showingBureau = false
+        showingCaptainJournal = false
+        showingBlackBox = false
+        showingCrewJournal = false
+        recovery.open(url, pushEventID: eventID)
     }
 
     private var journalReturnScreen: String {
@@ -4098,6 +4653,17 @@ struct ContentView: View {
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
+                if let id = recovery.savedID {
+                    Button("Продолжить") { openReturnURL(ReturnRoute(id: id).url) }
+                        .buttonStyle(DiveButtonStyle())
+                        .accessibilityIdentifier("continueExpedition")
+                        .accessibilityHint("Восстанавливает незавершённую экспедицию на паузе")
+                }
+                Button("События") { showingEvents = true }
+                    .frame(minHeight: 44).foregroundStyle(.white)
+                    .accessibilityIdentifier("openEvents")
+                    .accessibilityHint("История сохранений, напоминаний и важных событий")
+                    .accessibilityFocused($focusedControl, equals: "openEvents")
                 journalButton
                 Button {
                     garageMessage = ""
@@ -4111,7 +4677,7 @@ struct ContentView: View {
                 .buttonStyle(.plain).foregroundStyle(OceanPalette.white)
                 Button {
                     showingMap = false
-                    engine.startGame()
+                    if recovery.savedID != nil { confirmNewGame = true } else { engine.startGame() }
                 } label: {
                     HStack { Spacer(); Text("Начать экспедицию"); Spacer(); Image(systemName: "arrow.right") }
                 }

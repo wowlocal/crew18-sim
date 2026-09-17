@@ -183,3 +183,32 @@ extension AccessibilityAuditTests {
         }
     }
 }
+
+extension AccessibilityAuditTests {
+    @MainActor
+    func testSavedExpeditionAndEventsAccessibility() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-accessibilityAuditState", "paused"]
+        app.launch()
+        let home = app.buttons["returnToMenu"]
+        XCTAssertTrue(home.waitForExistence(timeout: 5))
+        for _ in 0..<6 where !home.isHittable { app.swipeUp() }
+        home.tap()
+        let resume = app.buttons["continueExpedition"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 5))
+        for _ in 0..<6 where !resume.isHittable { app.swipeUp() }
+        XCTAssertFalse(resume.label.isEmpty)
+        app.buttons["openEvents"].tap()
+        XCTAssertTrue(app.navigationBars["События"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["eventFilter"].exists)
+        try app.performAccessibilityAudit()
+        app.buttons["closeEvents"].tap()
+        resume.tap()
+        XCTAssertTrue(app.buttons["resumeDive"].waitForExistence(timeout: 5))
+        try app.performAccessibilityAudit()
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        XCTAssertTrue(app.buttons["continueExpedition"].waitForExistence(timeout: 5))
+    }
+}

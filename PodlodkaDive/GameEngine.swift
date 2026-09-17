@@ -3,18 +3,18 @@ import Foundation
 import QuartzCore
 import UIKit
 
-enum RunState: Equatable { case ready, playing, paused, gameOver, completed }
-enum FailureReason { case hull, energy }
-enum PickupKind: String { case battery, shield, sample, blackBox, crystal }
-enum MinePhase { case idle, armed, exploding, spent }
-enum DiveZone: Equatable { case ocean, bossCave }
-enum BossStrikePhase { case warning, impact }
+enum RunState: Codable, Equatable { case ready, playing, paused, gameOver, completed }
+enum FailureReason: Codable { case hull, energy }
+enum PickupKind: String, Codable { case battery, shield, sample, blackBox, crystal }
+enum MinePhase: Codable { case idle, armed, exploding, spent }
+enum DiveZone: Codable, Equatable { case ocean, bossCave }
+enum BossStrikePhase: Codable { case warning, impact }
 
-struct OceanPortal {
+struct OceanPortal: Codable {
     let position: CGPoint
 }
 
-struct BossStrike {
+struct BossStrike: Codable {
     let position: CGPoint
     var phase: BossStrikePhase = .warning
     var timer: TimeInterval
@@ -127,14 +127,14 @@ private struct GarageSave: Codable {
     var selected: SubmarineStyle = .classic
 }
 
-struct OceanPickup: Identifiable {
+struct OceanPickup: Identifiable, Codable {
     let id: Int
     let kind: PickupKind
     let position: CGPoint
     var collected = false
 }
 
-struct OceanMine: Identifiable {
+struct OceanMine: Identifiable, Codable {
     let id: Int
     let position: CGPoint
     var phase: MinePhase = .idle
@@ -144,7 +144,7 @@ struct OceanMine: Identifiable {
     static let fuse: TimeInterval = 1.25
 }
 
-struct OceanCurrent: Identifiable {
+struct OceanCurrent: Identifiable, Codable {
     let id: Int
     let bounds: CGRect
     let velocity: CGVector
@@ -155,7 +155,7 @@ struct RockContact {
     let penetration: CGFloat
 }
 
-struct OceanRock: Identifiable {
+struct OceanRock: Identifiable, Codable {
     let id: Int
     let vertices: [CGPoint]
 
@@ -202,7 +202,7 @@ struct OceanRock: Identifiable {
     }
 }
 
-struct OceanLevel {
+struct OceanLevel: Codable {
     let size: CGSize
     let spawn: CGPoint
     let base: CGPoint
@@ -481,7 +481,7 @@ final class GameEngine: NSObject, ObservableObject {
     var crystals: Int { garage.crystals }
     var selectedStyle: SubmarineStyle { garage.selected }
 
-    let level: OceanLevel
+    private(set) var level: OceanLevel
     private(set) var viewport = CGSize(width: 390, height: 844)
     private(set) var position: CGPoint
     private(set) var velocity = CGVector.zero
@@ -708,7 +708,143 @@ final class GameEngine: NSObject, ObservableObject {
         objectWillChange.send()
     }
 
+
+    var recovery: ExpeditionRecovery?
+    private var pausedSnapshot: ExpeditionSnapshot?
+    private var restoredPause = false
+
+    func snapshot() -> ExpeditionSnapshot {
+        if state == .paused, let pausedSnapshot { return pausedSnapshot }
+        return ExpeditionSnapshot(id: expeditionID,
+            level: level,
+            position: position,
+            velocity: velocity,
+            steering: steering,
+            camera: camera,
+            facing: facing,
+            energy: energy,
+            hull: hull,
+            hasShield: hasShield,
+            hasBlackBox: hasBlackBox,
+            samples: samples,
+            score: score,
+            bestAtStart: bestAtStart,
+            runElapsed: runElapsed,
+            distance: distance,
+            pickups: pickups,
+            mines: mines,
+            revealedPickups: revealedPickups,
+            trail: trail,
+            notice: notice,
+            failureReason: failureReason,
+            zone: zone,
+            portal: portal,
+            portalRevealed: portalRevealed,
+            bossStrike: bossStrike,
+            bossDefeated: bossDefeated,
+            bossReward: bossReward,
+            boostDirection: boostDirection,
+            portalReturnPosition: portalReturnPosition,
+            announcedCriticalHull: announcedCriticalHull,
+            announcedDockingHint: announcedDockingHint,
+            dockingTooFast: dockingTooFast,
+            didWarnEnergy: didWarnEnergy,
+            summaryTicks: summaryTicks,
+            pickupCount: pickupCount,
+            damageCount: damageCount,
+            eventCount: eventCount,
+            elapsed: elapsed,
+            expeditionNumber: expeditionNumber,
+            leakOnLeft: leakOnLeft,
+            boostRemaining: boostRemaining,
+            boostCooldown: boostCooldown,
+            lightBoostRemaining: lightBoostRemaining,
+            lightBoostCooldown: lightBoostCooldown,
+            sonarRemaining: sonarRemaining,
+            sonarCooldown: sonarCooldown,
+            invulnerability: invulnerability,
+            noticeRemaining: noticeRemaining,
+            bossTimeRemaining: bossTimeRemaining,
+            accessibilityMoveRemaining: accessibilityMoveRemaining,
+            bossStrikeCooldown: bossStrikeCooldown,
+            accumulator: accumulator,
+            nextLeakAt: nextLeakAt,
+            nextSnapshotAt: nextSnapshotAt,
+            nextSnapshot: nextSnapshot)
+    }
+
+    func restore(_ saved: ExpeditionSnapshot) {
+        pausedSnapshot = nil
+        restoredPause = true
+        level = saved.level
+        position = saved.position
+        velocity = saved.velocity
+        steering = saved.steering
+        camera = saved.camera
+        facing = saved.facing
+        energy = saved.energy
+        hull = saved.hull
+        hasShield = saved.hasShield
+        hasBlackBox = saved.hasBlackBox
+        samples = saved.samples
+        score = saved.score
+        bestAtStart = saved.bestAtStart
+        runElapsed = saved.runElapsed
+        distance = saved.distance
+        pickups = saved.pickups
+        mines = saved.mines
+        revealedPickups = saved.revealedPickups
+        trail = saved.trail
+        notice = saved.notice
+        failureReason = saved.failureReason
+        zone = saved.zone
+        portal = saved.portal
+        portalRevealed = saved.portalRevealed
+        bossStrike = saved.bossStrike
+        bossDefeated = saved.bossDefeated
+        bossReward = saved.bossReward
+        boostDirection = saved.boostDirection
+        portalReturnPosition = saved.portalReturnPosition
+        announcedCriticalHull = saved.announcedCriticalHull
+        announcedDockingHint = saved.announcedDockingHint
+        dockingTooFast = saved.dockingTooFast
+        didWarnEnergy = saved.didWarnEnergy
+        summaryTicks = saved.summaryTicks
+        pickupCount = saved.pickupCount
+        damageCount = saved.damageCount
+        eventCount = saved.eventCount
+        elapsed = saved.elapsed
+        expeditionNumber = saved.expeditionNumber
+        leakOnLeft = saved.leakOnLeft
+        boostRemaining = saved.boostRemaining
+        boostCooldown = saved.boostCooldown
+        lightBoostRemaining = saved.lightBoostRemaining
+        lightBoostCooldown = saved.lightBoostCooldown
+        sonarRemaining = saved.sonarRemaining
+        sonarCooldown = saved.sonarCooldown
+        invulnerability = saved.invulnerability
+        noticeRemaining = saved.noticeRemaining
+        bossTimeRemaining = saved.bossTimeRemaining
+        accessibilityMoveRemaining = saved.accessibilityMoveRemaining
+        bossStrikeCooldown = saved.bossStrikeCooldown
+        accumulator = saved.accumulator
+        nextLeakAt = saved.nextLeakAt
+        nextSnapshotAt = saved.nextSnapshotAt
+        nextSnapshot = saved.nextSnapshot
+        expeditionID = saved.id
+        expeditionId = saved.id.uuidString
+        diveID = saved.id
+        telemetryOpen = true
+        journalOpen = true
+        previousTimestamp = nil
+        events.send(.runStarted(saved.id))
+        state = .paused
+        navigate(to: "Pause", reason: "restore")
+    }
+
     func startGame() {
+        recovery?.deleteSave()
+        pausedSnapshot = nil
         if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "restart") }
         lastSnapshotTime = -1
         lastSteeringTime = -1
@@ -775,9 +911,10 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func returnToMenu() {
+        guard recovery?.save(exiting: true) != false else { pause(); return }
         navigate(to: "Welcome", reason: "surface")
-        if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "surface") }
-        closeJournal("Экспедиция прервана: возвращение в меню")
+        if state == .playing || state == .paused { endJournal(result: recovery == nil ? "abandoned" : "suspended", reason: "surface") }
+        closeJournal(recovery == nil ? "Экспедиция прервана: возвращение в меню" : "Экспедиция сохранена: возвращение в меню")
         log("Возвращение в меню")
         journalLeak = nil
         steering = .zero
@@ -906,6 +1043,9 @@ final class GameEngine: NSObject, ObservableObject {
 
     func pauseForScreen(_ screen: String) {
         guard state == .playing else { return }
+        restoredPause = false
+        pausedSnapshot = snapshot()
+        recovery?.save(exiting: false)
         steering = .zero
         accessibilityMoveRemaining = 0
         state = .paused
@@ -919,9 +1059,10 @@ final class GameEngine: NSObject, ObservableObject {
 
     func togglePause() {
         if state == .paused {
-            steering = .zero
-            accessibilityMoveRemaining = 0
-            accumulator = 0
+            recovery?.cancelReminders()
+            pausedSnapshot = nil
+            if !restoredPause { accumulator = 0 }
+            restoredPause = false
             previousTimestamp = nil
             state = .playing
             journal("resume")
@@ -1296,6 +1437,7 @@ final class GameEngine: NSObject, ObservableObject {
                 announce(A11yL10n.text("event.sample", defaultValue: "Образец на борту. Плюс 75 к добыче"))
             case .blackBox:
                 hasBlackBox = true
+                recovery?.record("blackBox", title: "Чёрный ящик найден", text: "Возвращайтесь на базу.")
                 journal("target", ["newTarget": "base"])
                 events.send(.objectiveChanged(true))
                 announce(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!"), duration: 6)
@@ -1392,6 +1534,8 @@ final class GameEngine: NSObject, ObservableObject {
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         guard state == .playing else { return }
+        recovery?.record(success ? "completed" : "gameOver", title: success ? "Экспедиция завершена" : "Экспедиция потеряна", text: "История сохранена. Продолжение недоступно.")
+        recovery?.deleteSave()
         defer {
             if success { journal("docking") }
             journal(success ? "completed" : "gameOver")
@@ -1437,4 +1581,64 @@ private final class DisplayLinkTarget: NSObject {
     weak var engine: GameEngine?
     init(engine: GameEngine) { self.engine = engine }
     @objc func tick(_ link: CADisplayLink) { engine?.frameDidFire(link) }
+}
+
+struct ExpeditionSnapshot: Codable {
+    var version = 1
+    var id: UUID
+    var level: OceanLevel
+    var position: CGPoint
+    var velocity: CGVector
+    var steering: CGVector
+    var camera: CGPoint
+    var facing: CGFloat
+    var energy: CGFloat
+    var hull: Int
+    var hasShield: Bool
+    var hasBlackBox: Bool
+    var samples: Int
+    var score: Int
+    var bestAtStart: Int
+    var runElapsed: TimeInterval
+    var distance: CGFloat
+    var pickups: [OceanPickup]
+    var mines: [OceanMine]
+    var revealedPickups: Set<Int>
+    var trail: [CGPoint]
+    var notice: String
+    var failureReason: FailureReason
+    var zone: DiveZone
+    var portal: OceanPortal?
+    var portalRevealed: Bool
+    var bossStrike: BossStrike?
+    var bossDefeated: Bool
+    var bossReward: Int
+    var boostDirection: CGVector
+    var portalReturnPosition: CGPoint
+    var announcedCriticalHull: Bool
+    var announcedDockingHint: Bool
+    var dockingTooFast: Bool
+    var didWarnEnergy: Bool
+    var summaryTicks: Int
+    var pickupCount: Int
+    var damageCount: Int
+    var eventCount: Int
+    var elapsed: TimeInterval
+    var expeditionNumber: Int
+    var leakOnLeft: Bool
+    var boostRemaining: TimeInterval
+    var boostCooldown: TimeInterval
+    var lightBoostRemaining: TimeInterval
+    var lightBoostCooldown: TimeInterval
+    var sonarRemaining: TimeInterval
+    var sonarCooldown: TimeInterval
+    var invulnerability: TimeInterval
+    var noticeRemaining: TimeInterval
+    var bossTimeRemaining: TimeInterval
+    var accessibilityMoveRemaining: TimeInterval
+    var bossStrikeCooldown: TimeInterval
+    var accumulator: TimeInterval
+    var nextLeakAt: TimeInterval
+    var nextSnapshotAt: TimeInterval
+    var nextSnapshot: TimeInterval
 }
