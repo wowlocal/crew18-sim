@@ -294,6 +294,10 @@ struct SituationSummary: Equatable {
         let distance: Int
         let course: CompassCourse
     }
+    var zone: String = "ocean"
+    var position: CGPoint = .zero
+    var energy: CGFloat = 100
+    var hull: Int = 3
     let depth: Int
     let speed: Int
     let returning: Bool
@@ -307,6 +311,7 @@ struct SituationSummary: Equatable {
 }
 
 enum GameEvent: Equatable {
+    case diagnostic(BlackBoxLevel, BlackBoxCategory, String, [String: String])
     case speak(String)
     case danger(String)
     case energyLow
@@ -373,6 +378,7 @@ final class GameEngine: NSObject, ObservableObject {
     @Published private(set) var state: RunState = .ready {
         didSet { if oldValue != state { events.send(.stateChanged(state)) } }
     }
+    private var dockingTooFast = false
     private var didWarnEnergy = false
     private var summaryTicks = 0
     @Published private(set) var elapsed: TimeInterval = 0
@@ -383,6 +389,7 @@ final class GameEngine: NSObject, ObservableObject {
     @Published private(set) var eventCount = 0
 
     @Published private var garage: GarageSave
+    private(set) var garageLoadError: String?
     private static let garageKey = "podlodkaDive.garage.v1"
     var crystals: Int { garage.crystals }
     var selectedStyle: SubmarineStyle { garage.selected }
@@ -450,8 +457,11 @@ final class GameEngine: NSObject, ObservableObject {
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
-        var saved = defaults.data(forKey: Self.garageKey)
-            .flatMap { try? JSONDecoder().decode(GarageSave.self, from: $0) } ?? GarageSave()
+        var saved = GarageSave()
+        if let data = defaults.data(forKey: Self.garageKey) {
+            do { saved = try JSONDecoder().decode(GarageSave.self, from: data) }
+            catch { garageLoadError = error.localizedDescription }
+        }
         saved.crystals = max(0, saved.crystals)
         saved.unlocked.insert(.classic)
         if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
@@ -577,20 +587,22 @@ final class GameEngine: NSObject, ObservableObject {
     /// Purchases and equipment changes are allowed only before an expedition.
     @discardableResult
     func customize(_ style: SubmarineStyle) -> String {
-        guard state == .ready else { return "Открой гараж перед началом экспедиции." }
+        guard state == .ready else { events.send(.diagnostic(.warning, .event, "garage.denied", ["reason": "state"])); return "Открой гараж перед началом экспедиции." }
         let purchased = !owns(style)
         if purchased {
-            guard crystals >= style.price else { return "Не хватает кристаллов: нужно ещё \(style.price - crystals)." }
+            guard crystals >= style.price else { events.send(.diagnostic(.warning, .resource, "garage.denied", ["reason": "crystals", "style": style.rawValue])); return "Не хватает кристаллов: нужно ещё \(style.price - crystals)." }
             garage.crystals -= style.price
             garage.unlocked.insert(style)
         }
+        events.send(.diagnostic(.info, .event, purchased ? "garage.purchase" : "garage.equip", ["style": style.rawValue, "price": String(purchased ? style.price : 0)]))
         garage.selected = style
         saveGarage()
         return "\(purchased ? "Куплено и установлено" : "Установлено"): \(style.title). Баланс: \(crystals) кристаллов."
     }
 
     private func saveGarage() {
-        if let data = try? JSONEncoder().encode(garage) { defaults.set(data, forKey: Self.garageKey) }
+        do { defaults.set(try JSONEncoder().encode(garage), forKey: Self.garageKey) }
+        catch { events.send(.diagnostic(.error, .system, "garage.save.failed", ["reason": error.localizedDescription])) }
     }
 
     func resize(to size: CGSize) {
@@ -697,6 +709,7 @@ final class GameEngine: NSObject, ObservableObject {
     func setSteering(_ vector: CGVector) {
         guard vector.dx.isFinite, vector.dy.isFinite else { journal("error", ["message": "nonfinite steering"]); return }
         guard state == .playing else { return }
+        let wasSteering = hypot(steering.dx, steering.dy) > 0
         accessibilityMoveRemaining = 0
         if runElapsed - lastSteeringTime >= 0.25 || vector == .zero {
             lastSteeringTime = runElapsed
@@ -705,6 +718,8 @@ final class GameEngine: NSObject, ObservableObject {
         let length = hypot(vector.dx, vector.dy)
         if length < 0.08 { steering = .zero }
         else { steering = CGVector(dx: vector.dx / max(1, length), dy: vector.dy / max(1, length)) }
+        let isSteering = hypot(steering.dx, steering.dy) > 0
+        if wasSteering != isSteering { events.send(.diagnostic(.info, .control, "steering", ["active": String(isSteering)])) }
         objectWillChange.send()
     }
 
@@ -718,7 +733,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateBoost() {
-        guard canBoost else { journal("error", ["message": "boost unavailable"]); return }
+        guard canBoost else { journal("error", ["message": "boost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Boost", "reason": state != .playing ? "state" : boostCooldown > 0 ? "cooldown" : "energy"])); return }
         defer { journal("boost") }
         let length = inputStrength
         boostDirection = length > 0.08
@@ -733,7 +748,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateSonar() {
-        guard canSonar else { journal("error", ["message": "sonar unavailable"]); return }
+        guard canSonar else { journal("error", ["message": "sonar unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Sonar", "reason": state != .playing ? "state" : sonarCooldown > 0 ? "cooldown" : "energy"])); return }
         defer { journal("sonar") }
         sonarRemaining = 5
         sonarCooldown = 8
@@ -748,7 +763,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateLightBoost() {
-        guard canLightBoost else { journal("error", ["message": "lightBoost unavailable"]); return }
+        guard canLightBoost else { journal("error", ["message": "lightBoost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "LightBoost", "reason": state != .playing ? "state" : lightBoostCooldown > 0 ? "cooldown" : "energy"])); return }
         defer { journal("lightBoost") }
         energy -= Self.lightBoostCost
         checkEnergyWarning()
@@ -922,7 +937,7 @@ final class GameEngine: NSObject, ObservableObject {
             let strike = bossStrike.flatMap { strike in
                 strike.phase == .warning ? contact("tentacle", A11yL10n.contactKind(.tentacle), strike.position) : nil
             }
-            return SituationSummary(depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
+            return SituationSummary(zone: String(describing: zone), position: position, energy: energy, hull: hull, depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
                 targetDistance: targetDistance, targetCourse: CompassCourse.n,
                 danger: strike, find: nil, currentCourse: nil, currentSpeed: 0,
                 caveTimeRemaining: Int(ceil(bossTimeRemaining)))
@@ -938,7 +953,7 @@ final class GameEngine: NSObject, ObservableObject {
             contact("pickup:\($0.id)", A11yL10n.pickupName($0.kind), $0.position)
         }
         let flow = current(at: position)
-        return SituationSummary(depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
+        return SituationSummary(zone: String(describing: zone), position: position, energy: energy, hull: hull, depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
             targetDistance: targetDistance, targetCourse: CompassCourse(vector: CGVector(dx: target.x - position.x, dy: target.y - position.y)),
             danger: dangers.min { $0.distance < $1.distance }, find: finds.min { $0.distance < $1.distance },
             currentCourse: hypot(flow.dx, flow.dy) > 0.1 ? CompassCourse(vector: flow) : nil,
@@ -1182,6 +1197,9 @@ final class GameEngine: NSObject, ObservableObject {
             announce(A11yL10n.text("event.hull.critical", defaultValue: "Внимание. Корпус: 1 из 3."), urgent: true)
         }
         let distanceToBase = hypot(position.x - level.base.x, position.y - level.base.y)
+        let tooFast = zone == .ocean && hasBlackBox && distanceToBase < 68 && speed >= 48
+        if tooFast && !dockingTooFast { events.send(.diagnostic(.warning, .control, "docking.denied", ["reason": "speed", "speed": String(Double(speed))])) }
+        dockingTooFast = tooFast
         if zone == .ocean, state == .playing, hasBlackBox, distanceToBase < 180, !announcedDockingHint {
             announcedDockingHint = true
             announce(A11yL10n.text("event.docking", defaultValue: "База рядом. Остановись в круге базы для швартовки."))

@@ -4,6 +4,9 @@ import Combine
 
 struct GameView: View {
     @StateObject private var engine: GameEngine
+    @StateObject private var recorder: BlackBoxRecorder
+    @StateObject private var captain = CaptainNote()
+    @State private var showingBlackBox = false
     @StateObject private var announcer: VoiceOverAnnouncer
     @AccessibilityFocusState private var focusedControl: String?
     @Environment(\.scenePhase) private var scenePhase
@@ -21,6 +24,7 @@ struct GameView: View {
     init(engine: GameEngine = GameEngine()) {
         let arguments = ProcessInfo.processInfo.arguments
         _engine = StateObject(wrappedValue: engine)
+        _recorder = StateObject(wrappedValue: BlackBoxRecorder(engine: engine))
         _showingMap = State(initialValue: arguments.contains("map"))
         _announcer = StateObject(wrappedValue: VoiceOverAnnouncer(engine: engine))
     }
@@ -88,10 +92,12 @@ struct GameView: View {
         .onChange(of: voiceOverButtons) { _, _ in engine.setSteering(.zero) }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
+                captain.finish(recorder: recorder)
                 engine.pause()
                 let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Expedition flush")
                 Task {
                     await engine.flushJournal()
+                    await recorder.drain()
                     if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask) }
                 }
             }
@@ -127,6 +133,22 @@ struct GameView: View {
                     ExpeditionReplayView(expeditionId: id)
                         .toolbar { Button("Закрыть") { showingReplay = false } }
                 }
+            }
+        }
+        .sheet(isPresented: $showingBlackBox) { BlackBoxJournal() }
+        .onChange(of: showingMap) { _, value in recorder.flow(value ? "map" : String(describing: engine.state)) }
+        .onChange(of: showingGarage) { _, value in recorder.flow(value ? "garage" : "ready") }
+        .onChange(of: showingBlackBox) { _, value in recorder.flow(value ? "journal" : String(describing: engine.state)) }
+        .onChange(of: engine.state) { _, state in if state != .playing { captain.finish(recorder: recorder) } }
+        .overlay(alignment: .bottom) {
+            if engine.state == .playing {
+                VStack {
+                    if captain.recording { Text(captain.text).font(.caption).lineLimit(3) }
+                    if let error = captain.error { Text(error).font(.caption) }
+                    Button { Task { await captain.toggle(recorder: recorder) } } label: {
+                        Label(captain.recording ? "journal.voice.stop" : "journal.voice.start", systemImage: captain.recording ? "stop.circle" : "mic")
+                    }.disabled(captain.busy).buttonStyle(.bordered).controlSize(.large).tint(.white).background(.black, in: Capsule()).accessibilityIdentifier("captainNote")
+                }.padding(.bottom, 8)
             }
         }
 
@@ -315,6 +337,7 @@ struct GameView: View {
     }
 
     private func applyStyle(_ style: SubmarineStyle) {
+        recorder.record(.event, "garage.selection", attrs: ["style": style.rawValue, "balance": String(engine.crystals)])
         garageMessage = engine.customize(style)
         if UIAccessibility.isVoiceOverRunning { UIAccessibility.post(notification: .announcement, argument: garageMessage) }
     }
@@ -1030,7 +1053,7 @@ private struct LightBoostButton: View {
     }
 }
 
-private struct ExpeditionMap: View {
+struct LiveExpeditionMap: View {
     @ObservedObject var engine: GameEngine
     var body: some View {
         Canvas { context, size in

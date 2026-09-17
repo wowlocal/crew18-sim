@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 import Combine
 import SwiftUI
 @testable import PodlodkaDive
@@ -864,4 +865,166 @@ final class GameEngineTests: XCTestCase {
     }
 
 
+}
+
+// MARK: - Expedition black box
+@MainActor final class BlackBoxTests: XCTestCase {
+    private func store() throws -> BlackBoxStore {
+        BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
+    }
+    func testVolumeBatchPaginationAndConcurrentOrder() async throws {
+        let store = try store(), id = UUID()
+        let logger = BlackBox(store: store)
+        await logger.recover()
+        await logger.log(.info, .state, "run.start", runID: id, t: 0)
+        for i in 1..<63 { await logger.log(.info, .event, "event", runID: id, t: Double(i)) }
+        let reader = BlackBoxReader(store: store)
+        let before = try await reader.page(runID: id)
+        XCTAssertTrue(before.isEmpty)
+        await logger.log(.error, .hazard, "damage", runID: id, t: 63)
+        let batch = try await reader.page(runID: id)
+        XCTAssertEqual(batch.count, 64)
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<600 { group.addTask { await logger.log(.info, .event, "concurrent", runID: id, t: Double(i)) } }
+        }
+        await logger.flush()
+        let all = try await reader.all(runID: id)
+        XCTAssertEqual(all.count, 664)
+        XCTAssertEqual(Set(all.map(\.id)).count, all.count)
+        XCTAssertEqual(all.map(\.seq), Array(1...664))
+        let json = try JSONEncoder().encode(all)
+        XCTAssertEqual(try JSONDecoder().decode([BlackBoxEntry].self, from: json), all)
+        XCTAssertTrue(String(decoding: json, as: UTF8.self).contains(id.uuidString))
+    }
+    func testRecoveryIsIdempotentAndRetentionKeepsTenRuns() async throws {
+        let store = try store()
+        for i in 0..<12 {
+            try await store.write([BlackBoxEntry(runID: UUID(), seq: i + 1, t: 0, wallTime: Date(timeIntervalSince1970: Double(i)), level: .info, category: .state, message: "run.start", attrs: [:])])
+        }
+        _ = try await store.recoverAndPrune()
+        _ = try await store.recoverAndPrune()
+        let reader = BlackBoxReader(store: store)
+        let runs = try await reader.runs()
+        XCTAssertEqual(runs.count, 10)
+        let entries = try await reader.all()
+        XCTAssertEqual(entries.filter { $0.attrs["outcome"] == "interrupted" }.count, 10)
+    }
+    func testRecorderCapturesSnapshotsDenialsAndFinalState() async throws {
+        let store = try store(), logger = BlackBox(store: store)
+        let engine = GameEngine(randomValue: { 1 })
+        let recorder = BlackBoxRecorder(engine: engine, logger: logger)
+        engine.startGame()
+        engine.activateBoost(); engine.activateBoost()
+        for _ in 0..<120 { engine.step(deltaTime: 1.0 / 120) }
+        engine.returnToMenu()
+        await recorder.drain()
+        let entries = try await BlackBoxReader(store: store).all()
+        XCTAssertEqual(entries.filter { $0.message == "run.start" }.count, 1)
+        XCTAssertEqual(entries.filter { $0.message == "run.end" }.count, 1)
+        XCTAssertEqual(entries.filter { $0.message == "snapshot" }.count, 1)
+        XCTAssertTrue(entries.contains { $0.message == "ability.denied" && $0.attrs["reason"] == "cooldown" })
+        let samples = entries.compactMap(ReplaySample.init)
+        XCTAssertEqual(samples.last?.x, Double(engine.position.x))
+        XCTAssertEqual(samples.last?.energy, Double(engine.energy))
+    }
+    func testInterpolationClampsAndDoesNotInterpolateDiscreteHull() {
+        let samples = [ReplaySample(t: 0, x: 0, y: 10, energy: 100, hull: 3, speed: 0), ReplaySample(t: 10, x: 100, y: 30, energy: 80, hull: 2, speed: 20)]
+        let middle = ReplaySample.interpolate(samples, at: 5)
+        XCTAssertEqual(middle?.x, 50); XCTAssertEqual(middle?.energy, 90)
+        XCTAssertEqual(middle?.hull, 3); XCTAssertEqual(middle?.speed, 10)
+        XCTAssertEqual(ReplaySample.interpolate(samples, at: -1)?.x, 0)
+        XCTAssertEqual(ReplaySample.interpolate(samples, at: 20)?.x, 100)
+    }
+    func testInjectedCaptainText() async throws {
+        final class Transcriber: VoiceNoteTranscriber {
+            func start(update: @escaping @MainActor (String) -> Void, failure: @escaping @MainActor (String) -> Void) async throws { update("Aster найден") }
+            func stop() {}
+        }
+        let store = try store(), logger = BlackBox(store: store)
+        let engine = GameEngine(randomValue: { 1 })
+        let recorder = BlackBoxRecorder(engine: engine, logger: logger)
+        engine.startGame()
+        let note = CaptainNote(transcriber: Transcriber())
+        await note.toggle(recorder: recorder)
+        XCTAssertTrue(note.recording)
+        note.finish(recorder: recorder)
+        await recorder.drain()
+        let entries = try await BlackBoxReader(store: store).all()
+        XCTAssertEqual(entries.filter { $0.category == .captain }.map(\.message), ["Aster найден"])
+        XCTAssertEqual(engine.state, .playing)
+    }
+}
+
+extension BlackBoxTests {
+    func testDatabaseReopensWithoutDuplicates() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".store")
+        defer {
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
+        }
+        let configuration = ModelConfiguration(url: url)
+        let id = UUID()
+        let entry = BlackBoxEntry(runID: id, seq: 1, t: 0, wallTime: Date(), level: .info, category: .state, message: "run.start", attrs: [:])
+        let first = BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self, configurations: configuration))
+        try await first.write([entry]); try await first.write([entry])
+        let second = BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self, configurations: configuration))
+        let entries = try await BlackBoxReader(store: second).all(runID: id)
+        XCTAssertEqual(entries, [entry])
+    }
+    func testTimerFlushUsesInjectedSchedulerAndWallClock() async throws {
+        actor Gate {
+            var continuation: CheckedContinuation<Void, Never>?
+            func sleep() async { await withCheckedContinuation { continuation = $0 } }
+            func ready() -> Bool { continuation != nil }
+            func tick() { continuation?.resume(); continuation = nil }
+        }
+        let gate = Gate(), store = try store(), id = UUID()
+        let date = Date(timeIntervalSince1970: 123)
+        let logger = BlackBox(store: store, now: { date }, sleep: { await gate.sleep() })
+        await logger.log(.info, .state, "run.start", runID: id, t: 0)
+        while !(await gate.ready()) { await Task.yield() }
+        await gate.tick()
+        var entries: [BlackBoxEntry] = []
+        for _ in 0..<1000 {
+            entries = try await BlackBoxReader(store: store).all()
+            if !entries.isEmpty { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?.wallTime, date)
+    }
+}
+
+extension GameEngineTests {
+    func testScriptedRunBlackBoxEventOrderAndTrajectory() async throws {
+        var level = empty
+        level.pickups = [.init(id: 0, kind: .shield, position: level.spawn),
+                         .init(id: 1, kind: .blackBox, position: CGPoint(x: 650, y: 300))]
+        level.mines = [.init(id: 0, position: CGPoint(x: 500, y: 300))]
+        let engine = GameEngine(level: level, randomValue: { 1 })
+        let store = BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
+        let logger = BlackBox(store: store)
+        let recorder = BlackBoxRecorder(engine: engine, logger: logger)
+        var expected: [String] = []
+        var trajectory: [CGPoint] = []
+        var ticks = 0
+        let token = engine.events.sink { event in
+            switch event {
+            case .speak(let text), .danger(let text): expected.append(text)
+            case .situation(let summary):
+                ticks += 1; if ticks % 4 == 0 { trajectory.append(summary.position) }
+            default: break
+            }
+        }
+        defer { token.cancel() }
+        engine.resize(to: CGSize(width: 390, height: 844)); engine.startGame()
+        navigate(engine, through: [CGPoint(x: 650, y: 300)])
+        navigate(engine, through: [level.base])
+        await recorder.drain()
+        let entries = try await BlackBoxReader(store: store).all()
+        let actual = entries.filter { ($0.category == .event && $0.message != "blackBox" && $0.message != "success" && $0.message != "record") || $0.category == .hazard }.map(\.message)
+        XCTAssertEqual(actual, expected)
+        let captured = entries.filter { $0.message == "snapshot" }.compactMap(ReplaySample.init)
+        XCTAssertEqual(captured.map { CGPoint(x: $0.x, y: $0.y) }, trajectory)
+        XCTAssertTrue(entries.contains { $0.message == "blackBox" })
+    }
 }
