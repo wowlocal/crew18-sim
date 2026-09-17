@@ -2,6 +2,7 @@ import XCTest
 import SwiftData
 import Combine
 import SwiftUI
+import Speech
 @testable import PodlodkaDive
 
 @MainActor
@@ -1231,6 +1232,23 @@ final class CaptainLoggerTests: XCTestCase {
 
 @MainActor
 final class DayTwoIntegrationTests: XCTestCase {
+    func testSpeechAuthorizationReplyCanArriveOnBackgroundQueue() async {
+        // given: Speech/TCC can invoke its Objective-C completion off the main actor.
+        for expected in [SFSpeechRecognizerAuthorizationStatus.authorized, .denied, .restricted] {
+            // when: exercise the same callback passed to Speech, without a permission dialog.
+            let actual = await withCheckedContinuation { continuation in
+                DeviceVoiceNoteTranscriber.requestSpeechAuthorization(continuation: continuation) { reply in
+                    DispatchQueue.global().async {
+                        dispatchPrecondition(condition: .notOnQueue(.main))
+                        reply(expected)
+                    }
+                }
+            }
+            // then: the actor resumes with the original result instead of a queue assertion trap.
+            XCTAssertEqual(actual, expected)
+        }
+    }
+
     func testRestartSeparatesArchivesAndPauseUsesSimulationTime() async throws {
         // given: all persistent views observe the same game, with isolated stores.
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
