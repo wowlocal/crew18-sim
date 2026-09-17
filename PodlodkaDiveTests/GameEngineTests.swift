@@ -4,6 +4,7 @@ import XCTest
 import SwiftData
 import Combine
 import SwiftUI
+import Speech
 @testable import PodlodkaDive
 
 @MainActor
@@ -41,26 +42,8 @@ final class GameEngineTests: XCTestCase {
         add(attachment)
     }
 
-    /// Route follower uses the same stick as the player at 10 Hz, including
-    /// counter-steering against visible currents. No position/energy overrides.
     private func navigate(_ engine: GameEngine, through points: [CGPoint], fps: Double = 120) {
-        for target in points {
-            for _ in 0..<700 {
-                guard engine.state == .playing else { return }
-                let dx = target.x - engine.position.x, dy = target.y - engine.position.y
-                if hypot(dx, dy) < 8 { break }
-                let distance = hypot(dx, dy)
-                let speed = min(GameEngine.cruiseSpeed, distance * 2.8)
-                let flow = engine.current(at: engine.position)
-                engine.setSteering(CGVector(dx: (dx / distance * speed - flow.dx) / GameEngine.cruiseSpeed,
-                                             dy: (dy / distance * speed - flow.dy) / GameEngine.cruiseSpeed))
-                advance(engine, 0.1, fps: fps)
-            }
-            XCTAssertLessThan(hypot(target.x - engine.position.x, target.y - engine.position.y), 10,
-                              "Unreachable waypoint \(target), position \(engine.position), energy \(engine.energy)")
-        }
-        engine.setSteering(.zero)
-        advance(engine, 0.5, fps: fps)
+        GameTestPilot.navigate(engine, through: points, fps: fps)
     }
 
     func testJournalLeakIsThrottledExpiresAndFreezesOnPause() {
@@ -396,19 +379,7 @@ final class GameEngineTests: XCTestCase {
         let engine = makeEngine(level: level, randomValues: [0.1, 0])
         advance(engine, 0.01)
         let returnPoint = level.spawn
-        var sawWarning = false
-        for _ in 0..<300 where engine.zone == .bossCave && engine.state == .playing {
-            if let strike = engine.bossStrike, strike.phase == .warning {
-                sawWarning = true
-                let goRight = strike.position.x < GameEngine.caveSize.width / 2
-                    || engine.position.x < GameEngine.caveSize.width / 2
-                engine.setSteering(CGVector(dx: goRight ? 1 : -1, dy: 0))
-                engine.activateBoost()
-            } else if engine.bossStrike?.phase == .impact {
-                engine.setSteering(.zero)
-            }
-            advance(engine, 0.1)
-        }
+        let sawWarning = GameTestPilot.surviveCave(engine)
         XCTAssertTrue(sawWarning)
         XCTAssertEqual(engine.state, .playing)
         XCTAssertEqual(engine.zone, .ocean)
@@ -1263,6 +1234,23 @@ final class CaptainLoggerTests: XCTestCase {
 
 @MainActor
 final class DayTwoIntegrationTests: XCTestCase {
+    func testSpeechAuthorizationReplyCanArriveOnBackgroundQueue() async {
+        // given: Speech/TCC can invoke its Objective-C completion off the main actor.
+        for expected in [SFSpeechRecognizerAuthorizationStatus.authorized, .denied, .restricted] {
+            // when: exercise the same callback passed to Speech, without a permission dialog.
+            let actual = await withCheckedContinuation { continuation in
+                DeviceVoiceNoteTranscriber.requestSpeechAuthorization(continuation: continuation) { reply in
+                    DispatchQueue.global().async {
+                        dispatchPrecondition(condition: .notOnQueue(.main))
+                        reply(expected)
+                    }
+                }
+            }
+            // then: the actor resumes with the original result instead of a queue assertion trap.
+            XCTAssertEqual(actual, expected)
+        }
+    }
+
     func testRestartSeparatesArchivesAndPauseUsesSimulationTime() async throws {
         // given: all persistent views observe the same game, with isolated stores.
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -1460,6 +1448,47 @@ final class ExpeditionRecoveryTests: XCTestCase {
         XCTAssertEqual(engine.position, position)
         XCTAssertEqual(recovery.history.filter { $0.kind == "restore" }.count, 1)
     }
+    func testCampaignSnapshotRestoresMissionAndObjectiveProgress() throws {
+        // given: a saved third mission, then a different selected mission in the menu.
+        let (engine, _, _, _) = fixture()
+        engine.startGame()
+        var saved = engine.snapshot()
+        var mission = MissionRun(mission: .silentSignal, randomValue: 0.8)
+        mission.signals[0].finding = .buoy
+        mission.droneRecovered = true
+        mission.returningEarly = true
+        saved.missionRun = mission
+        saved.level = CampaignMission.silentSignal.level
+        let decoded = try JSONDecoder().decode(ExpeditionSnapshot.self, from: JSONEncoder().encode(saved))
+
+        // when
+        engine.restore(decoded)
+
+        // then: retaining only physics would silently restore Aster with no search progress.
+        XCTAssertEqual(engine.state, .paused)
+        XCTAssertEqual(engine.mission, .silentSignal)
+        XCTAssertEqual(engine.missionRun?.signals[0].finding, .buoy)
+        XCTAssertEqual(engine.missionRun?.droneRecovered, true)
+        XCTAssertEqual(engine.missionRun?.returningEarly, true)
+        XCTAssertEqual(engine.snapshot().missionRun?.mission, .silentSignal)
+    }
+
+    func testPausedReturnCourseSurvivesSave() throws {
+        // given: pause caches the physical state before the captain chooses a return course.
+        let (engine, recovery, _, _) = fixture()
+        engine.startGame()
+        engine.pause()
+
+        // when
+        engine.setReturnToBase(true)
+        engine.returnToMenu()
+        let saved = try recovery.load()
+        engine.restore(saved)
+
+        // then: the cached snapshot must not overwrite the new mission decision.
+        XCTAssertEqual(engine.missionRun?.returningEarly, true)
+    }
+
     func testScheduleCancelRescheduleAndPushRoute() async throws {
         let (engine, recovery, client, _) = fixture()
         engine.startGame(); engine.pause()

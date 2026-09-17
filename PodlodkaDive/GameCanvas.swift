@@ -34,13 +34,13 @@ struct GameCanvas: View {
                 drawLowVisibility(in: &context, size: size)
             }
             drawSubmarine(in: &context, size: size)
-            if engine.state == .playing, let leak = engine.journalLeak {
+            if engine.state == .playing, engine.noticeRemaining <= 0, let leak = engine.journalLeak {
                 let age = engine.runElapsed - leak.startedAt
                 let boat = engine.screenPoint(engine.position)
                 let drift = reduceMotion ? 0 : age * 9
                 let width = min(260.0, size.width - 24)
                 let x = min(size.width - width / 2 - 12, max(width / 2 + 12, boat.x + leak.side * 24))
-                let y = max(30, boat.y - 65 - drift)
+                let y = min(size.height - 220, max(210, boat.y + 75 - drift))
                 context.drawLayer { bubble in
                     bubble.opacity = reduceMotion ? 1 : min(1, max(0, (3.5 - age) / 0.7))
                     let rect = CGRect(x: x - width / 2, y: y - 26, width: width, height: 52)
@@ -128,7 +128,13 @@ struct GameCanvas: View {
         for zone in engine.level.currents where visible.intersects(zone.bounds) { drawCurrent(zone, in: &context) }
         for rock in engine.level.rocks where visible.intersects(rock.bounds) { drawRock(rock, in: &context) }
         if visible.insetBy(dx: -80, dy: -80).contains(engine.level.base) { drawBase(in: &context) }
-        if visible.insetBy(dx: -120, dy: -120).contains(engine.level.wreck) { drawWreck(in: &context) }
+        if engine.mission == .currentStation || engine.mission == .silentSignal {
+            for landmark in engine.missionLandmarks where visible.insetBy(dx: -100, dy: -100).contains(landmark.position) {
+                drawMissionLandmark(landmark, in: &context)
+            }
+        } else if visible.insetBy(dx: -120, dy: -120).contains(engine.level.wreck) {
+            drawWreck(in: &context)
+        }
         for pickup in engine.pickups where !pickup.collected && visible.contains(pickup.position) { drawPickup(pickup, in: &context) }
         for mine in engine.mines where visible.contains(mine.position) { drawMine(mine, in: &context) }
         if let portal = engine.portal, visible.insetBy(dx: -60, dy: -60).contains(portal.position) {
@@ -287,7 +293,7 @@ struct GameCanvas: View {
 
     private func drawBase(in context: inout GraphicsContext) {
         let p = engine.level.base
-        let readyToDock = engine.hasBlackBox
+        let readyToDock = engine.returningToBase
         context.stroke(Path(ellipseIn: CGRect(x: p.x - 68, y: p.y - 68, width: 136, height: 136)),
                        with: .color(OceanPalette.teal.opacity(readyToDock ? 0.7 : 0.22)),
                        style: StrokeStyle(lineWidth: 1.5, dash: [4, 7]))
@@ -306,6 +312,31 @@ struct GameCanvas: View {
         if readyToDock && hypot(engine.position.x - p.x, engine.position.y - p.y) < 100 {
             drawText("Отпусти стик", at: CGPoint(x: p.x, y: p.y + 101), color: OceanPalette.white, in: &context)
         }
+    }
+
+    private func drawMissionLandmark(_ landmark: MissionLandmark, in context: inout GraphicsContext) {
+        let point = landmark.position
+        let station = engine.mission == .currentStation
+        let rect = CGRect(x: point.x - 38, y: point.y - 25, width: 76, height: 50)
+        context.fill(Path(roundedRect: rect, cornerRadius: station ? 8 : 24), with: .color(OceanPalette.ink))
+        context.stroke(Path(roundedRect: rect, cornerRadius: station ? 8 : 24), with: .color(OceanPalette.gold), lineWidth: 3)
+        if station || landmark.kind == .signal {
+            let radius: CGFloat = station ? 68 : MissionRun.scanRadius
+            context.stroke(Path(ellipseIn: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)),
+                           with: .color(OceanPalette.gold.opacity(0.5)), style: StrokeStyle(lineWidth: 1.5, dash: [7, 6]))
+        }
+        let symbol: String = switch landmark.kind {
+        case .station: "antenna.radiowaves.left.and.right"
+        case .signal: "questionmark"
+        case .drone: "camera.metering.spot"
+        case .recovered: "checkmark"
+        case .buoy: "lifepreserver"
+        case .wreck: "ferry"
+        }
+        var icon = context.resolve(Image(systemName: symbol))
+        icon.shading = .color(.white)
+        context.draw(icon, in: CGRect(x: point.x - 14, y: point.y - 14, width: 28, height: 28))
+        drawText(landmark.label, at: CGPoint(x: point.x, y: point.y + 46), color: .white, in: &context)
     }
 
     private func drawWreck(in context: inout GraphicsContext) {

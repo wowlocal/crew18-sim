@@ -12,6 +12,8 @@ struct BoatSnapshot: Codable, Sendable {
     let zone: String
     let state: String
     let speed: Double
+    var missionID: String? = nil
+    var missionPhase: String? = nil
 }
 
 struct JournalEntry: Codable, Identifiable, Sendable {
@@ -32,6 +34,7 @@ struct DiveReceipt: Identifiable, Sendable {
     let boosts: Int
     let reefs: Int
     let blackBoxes: Int
+    var missionID: String? = nil
 }
 
 protocol ExpeditionLogging: Sendable {
@@ -80,7 +83,7 @@ final class ExpeditionJournal: ExpeditionLogging, @unchecked Sendable {
             let sql = """
                 SELECT dive, MIN(wall), COALESCE(MAX(CASE WHEN kind='finish' THEN message END),
                 'Дело не закрыто: погружение идёт или было прервано'),
-                SUM(kind='boost'), SUM(kind='reef.damage'), SUM(kind='pickup.blackBox')
+                SUM(kind='boost'), SUM(kind='reef.damage'), SUM(kind='pickup.blackBox'), MAX(json_extract(payload,'$.boat.missionID'))
                 FROM events \(diveID.map { "WHERE dive='\($0.uuidString)'" } ?? "") GROUP BY dive ORDER BY MIN(wall) DESC, dive LIMIT 50 OFFSET \(max(0, offset))
                 """
             let statement = try prepare(sql)
@@ -90,7 +93,8 @@ final class ExpeditionJournal: ExpeditionLogging, @unchecked Sendable {
                 guard let id = UUID(uuidString: string(statement, 0)) else { throw JournalError("Некорректный номер дела") }
                 result.append(DiveReceipt(id: id, date: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1)),
                     outcome: string(statement, 2), boosts: Int(sqlite3_column_int(statement, 3)),
-                    reefs: Int(sqlite3_column_int(statement, 4)), blackBoxes: Int(sqlite3_column_int(statement, 5))))
+                    reefs: Int(sqlite3_column_int(statement, 4)), blackBoxes: Int(sqlite3_column_int(statement, 5)),
+                    missionID: sqlite3_column_type(statement, 6) == SQLITE_NULL ? nil : string(statement, 6)))
             }
             return result
         }

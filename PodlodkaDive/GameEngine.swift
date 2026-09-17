@@ -29,6 +29,7 @@ struct AccessibilityContact: Identifiable, Equatable {
     let kind: AccessibilityContactKind
     let distanceMeters: Int
     let clockHour: Int
+    var name: String? = nil
 }
 
 enum AccessibilityNavigation {
@@ -92,7 +93,7 @@ enum A11yL10n {
 
     static func contact(_ contact: AccessibilityContact) -> String {
         format("a11y.contact.format", defaultValue: "%@, %lld метров, на %lld часов",
-               contactKind(contact.kind), Int64(contact.distanceMeters), Int64(contact.clockHour))
+               (contact.name ?? contactKind(contact.kind)), Int64(contact.distanceMeters), Int64(contact.clockHour))
     }
 }
 
@@ -202,66 +203,6 @@ struct OceanRock: Identifiable, Codable {
     }
 }
 
-struct OceanLevel: Codable {
-    let size: CGSize
-    let spawn: CGPoint
-    let base: CGPoint
-    let wreck: CGPoint
-    var rocks: [OceanRock] = []
-    var pickups: [OceanPickup] = []
-    var mines: [OceanMine] = []
-    var currents: [OceanCurrent] = []
-    var portalCandidates: [CGPoint] = []
-
-    static var expedition: OceanLevel {
-        func rock(_ id: Int, _ points: [(CGFloat, CGFloat)]) -> OceanRock {
-            OceanRock(id: id, vertices: points.map { CGPoint(x: $0.0, y: $0.1) })
-        }
-        func pickup(_ id: Int, _ kind: PickupKind, _ x: CGFloat, _ y: CGFloat) -> OceanPickup {
-            OceanPickup(id: id, kind: kind, position: CGPoint(x: x, y: y))
-        }
-        return OceanLevel(
-            size: CGSize(width: 1560, height: 2600), spawn: CGPoint(x: 245, y: 290),
-            base: CGPoint(x: 190, y: 230), wreck: CGPoint(x: 1370, y: 2330),
-            rocks: [
-                rock(0, [(345, 480), (510, 445), (630, 535), (665, 730), (560, 920), (345, 875), (290, 690)]),
-                rock(1, [(1080, 425), (1430, 480), (1480, 700), (1390, 960), (1060, 905), (985, 650)]),
-                rock(2, [(700, 1140), (965, 1120), (1070, 1310), (1000, 1550), (770, 1620), (595, 1450), (610, 1260)]),
-                rock(3, [(110, 1460), (245, 1410), (350, 1570), (320, 1880), (170, 1990), (75, 1810)]),
-                rock(4, [(1010, 1860), (1160, 1820), (1260, 1970), (1200, 2130), (995, 2160), (895, 2030)]),
-                rock(5, [(580, 2230), (720, 2200), (805, 2350), (725, 2520), (515, 2530), (470, 2380)])
-            ],
-            pickups: [
-                pickup(0, .blackBox, 1370, 2330),
-                pickup(1, .battery, 185, 1070), pickup(2, .battery, 440, 1780),
-                pickup(3, .battery, 1480, 2470), pickup(4, .battery, 1450, 1240),
-                pickup(5, .shield, 790, 470), pickup(6, .shield, 860, 2260),
-                pickup(7, .sample, 390, 320), pickup(8, .sample, 740, 830),
-                pickup(9, .sample, 1220, 1080), pickup(10, .sample, 465, 1370),
-                pickup(11, .sample, 820, 1770), pickup(12, .sample, 1350, 1660),
-                pickup(13, .sample, 190, 2250), pickup(14, .sample, 900, 2450),
-                pickup(15, .crystal, 320, 320), pickup(16, .crystal, 740, 900),
-                pickup(17, .crystal, 440, 1700), pickup(18, .crystal, 1350, 1740)
-            ],
-            mines: [
-                OceanMine(id: 0, position: CGPoint(x: 820, y: 700)),
-                OceanMine(id: 1, position: CGPoint(x: 875, y: 1030)),
-                OceanMine(id: 2, position: CGPoint(x: 1190, y: 1390)),
-                OceanMine(id: 3, position: CGPoint(x: 1370, y: 1950)),
-                OceanMine(id: 4, position: CGPoint(x: 440, y: 2190)),
-                OceanMine(id: 5, position: CGPoint(x: 1060, y: 2420))
-            ],
-            currents: [
-                OceanCurrent(id: 0, bounds: CGRect(x: 725, y: 540, width: 205, height: 490), velocity: CGVector(dx: 0, dy: 48)),
-                OceanCurrent(id: 1, bounds: CGRect(x: 520, y: 1645, width: 780, height: 155), velocity: CGVector(dx: 58, dy: 0)),
-                OceanCurrent(id: 2, bounds: CGRect(x: 1290, y: 1460, width: 230, height: 750), velocity: CGVector(dx: 0, dy: -38))
-            ],
-            portalCandidates: [
-                CGPoint(x: 850, y: 320), CGPoint(x: 410, y: 1120),
-                CGPoint(x: 1330, y: 1740), CGPoint(x: 870, y: 2110)
-            ])
-    }
-}
 
 enum CompassCourse: Int, CaseIterable, Equatable {
     case n, ne, e, se, s, sw, w, nw
@@ -298,6 +239,7 @@ struct SituationSummary: Equatable {
     var position: CGPoint = .zero
     var energy: CGFloat = 100
     var hull: Int = 3
+    var targetName: String? = nil
     let depth: Int
     let speed: Int
     let returning: Bool
@@ -367,7 +309,7 @@ final class GameEngine: NSObject, ObservableObject {
     private var journalScreen = "Welcome"
 
     func journal(_ type: String, _ extra: [String: String] = [:]) {
-        guard let id = expeditionId else { return }
+        guard telemetryOpen, let id = expeditionId else { return }
         var payload = journalState
         payload.merge(extra) { _, new in new }
         let prior = journalTask
@@ -384,7 +326,12 @@ final class GameEngine: NSObject, ObservableObject {
          "vx": String(Double(velocity.dx)), "vy": String(Double(velocity.dy)),
          "heading": String(Double(atan2(velocity.dy, velocity.dx))), "energy": String(Double(energy)),
          "hull": String(hull), "cargo": String(cargoValue), "samples": String(samples),
-         "blackBox": String(hasBlackBox), "shield": String(hasShield), "target": hasBlackBox ? "base" : "wreck",
+         "blackBox": String(hasBlackBox), "shield": String(hasShield), "target": targetLabel,
+         "missionID": mission?.rawValue ?? CampaignMission.aster.rawValue,
+         "missionTitle": mission?.title ?? CampaignMission.aster.title,
+         "mapVersion": "1", "objectiveReady": String(objectiveReady),
+         "missionPhase": missionPhase, "outcome": outcome?.rawValue ?? "inProgress",
+         "signals": (missionRun?.signals ?? []).map { "\($0.id),\($0.finding.rawValue),\($0.position.x),\($0.position.y)" }.joined(separator: ";"),
          "targetX": String(Double(target.x)), "targetY": String(Double(target.y)),
          "zone": String(describing: zone), "width": String(Double(zone == .ocean ? level.size.width : Self.caveSize.width)),
          "height": String(Double(zone == .ocean ? level.size.height : Self.caveSize.height)),
@@ -426,7 +373,8 @@ final class GameEngine: NSObject, ObservableObject {
             kind: kind, severity: severity, message: message,
             boat: BoatSnapshot(x: Double(position.x), y: Double(position.y), energy: Double(energy),
                 hull: hull, cargo: cargoValue, blackBox: hasBlackBox, shield: hasShield,
-                zone: String(describing: zone), state: String(describing: state), speed: Double(speed))))
+                zone: String(describing: zone), state: String(describing: state), speed: Double(speed),
+                missionID: mission?.rawValue, missionPhase: missionPhase)))
     }
 
     private func closeJournal(_ outcome: String, severity: String = "info") {
@@ -482,6 +430,11 @@ final class GameEngine: NSObject, ObservableObject {
     var selectedStyle: SubmarineStyle { garage.selected }
 
     private(set) var level: OceanLevel
+    let isCampaign: Bool
+    @Published private(set) var campaignProgress: CampaignProgress
+    private(set) var missionRun: MissionRun?
+    private(set) var outcome: ExpeditionOutcome?
+    var mission: CampaignMission? { isCampaign ? campaignProgress.selected : nil }
     private(set) var viewport = CGSize(width: 390, height: 844)
     private(set) var position: CGPoint
     private(set) var velocity = CGVector.zero
@@ -530,7 +483,7 @@ final class GameEngine: NSObject, ObservableObject {
     private var announcedDockingHint = false
     private let defaults: UserDefaults
     private let randomValue: () -> Double
-    private static let bestKey = "podlodkaDive.expedition.bestSalvage"
+    private static let bestKey = CampaignProgress.legacyBestKey
     static let hullRadius: CGFloat = 20
     static let cruiseSpeed: CGFloat = 96
     static let boostCost: CGFloat = 7
@@ -542,7 +495,7 @@ final class GameEngine: NSObject, ObservableObject {
     static let lightBoostRecharge: TimeInterval = 10
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
-    init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
+    init(defaults: UserDefaults = .standard, level: OceanLevel? = nil,
          telemetryLogger: ExpeditionLogger = .shared,
          journal: any ExpeditionLogging = ExpeditionJournal.shared,
          captainLogger: CaptainLogger = .shared,
@@ -560,12 +513,17 @@ final class GameEngine: NSObject, ObservableObject {
         self.receiptJournal = journal
         self.captainLogger = captainLogger
         self.defaults = defaults
-        self.level = level
+        let progress = CampaignProgress.load(from: defaults)
+        campaignProgress = progress
+        isCampaign = level == nil
+        let world = level ?? progress.selected.level
+        self.level = world
         self.randomValue = randomValue
-        position = level.spawn
-        pickups = level.pickups
-        mines = level.mines
-        bestScore = defaults.integer(forKey: Self.bestKey)
+        position = world.spawn
+        pickups = world.pickups
+        mines = world.mines
+        bestScore = level == nil ? (progress.bestScores[progress.selected.rawValue] ?? 0)
+            : defaults.integer(forKey: Self.bestKey)
         super.init()
         updateCamera(dt: 1, snap: true)
     }
@@ -573,11 +531,18 @@ final class GameEngine: NSObject, ObservableObject {
     var speed: CGFloat { hypot(velocity.dx, velocity.dy) }
     var inputStrength: CGFloat { hypot(steering.dx, steering.dy) }
     var isThrustActive: Bool { state == .playing && (inputStrength > 0 || boostRemaining > 0) }
-    var cargoValue: Int { samples * 75 + (hasBlackBox ? 600 : 0) + bossReward }
+    var cargoValue: Int { samples * 75 + (objectiveReady ? 600 : 0) + bossReward }
     var depth: Int { Int(max(0, position.y - 100) * 0.16) }
-    var target: CGPoint { zone == .bossCave ? CGPoint(x: Self.caveSize.width / 2, y: 145) : (hasBlackBox ? level.base : level.wreck) }
+    var target: CGPoint {
+        if zone == .bossCave { return CGPoint(x: Self.caveSize.width / 2, y: 145) }
+        if returningToBase { return level.base }
+        if mission == .silentSignal, let run = missionRun {
+            return run.foundDrone?.position ?? run.nearestUnidentified(to: position)?.position ?? level.base
+        }
+        return level.wreck
+    }
     var targetDistance: Int { Int(hypot(target.x - position.x, target.y - position.y) * 0.16) }
-    var isNewRecord: Bool { state == .completed && score > bestAtStart }
+    var isNewRecord: Bool { outcome == .completed && score > bestAtStart }
     var canBoost: Bool { state == .playing && boostCooldown <= 0 && energy >= Self.boostCost }
     var canLightBoost: Bool { state == .playing && lightBoostCooldown <= 0 && energy >= Self.lightBoostCost }
     var isLightBoostActive: Bool { lightBoostRemaining > 0 }
@@ -600,8 +565,18 @@ final class GameEngine: NSObject, ObservableObject {
             }
             return contacts
         }
-        var contacts = [contact(id: "target", kind: .target, point: target),
-                        contact(id: "base", kind: .base, point: level.base)]
+        var targetContact = contact(id: "target", kind: .target, point: target)
+        targetContact.name = targetLabel
+        var contacts = [targetContact, contact(id: "base", kind: .base, point: level.base)]
+        if mission == .silentSignal {
+            contacts += (missionRun?.signals ?? []).filter {
+                !($0.finding == .drone && missionRun?.droneRecovered == true)
+            }.map { signal in
+                var value = contact(id: "signal-\(signal.id)", kind: .target, point: signal.position)
+                value.name = signal.label
+                return value
+            }
+        }
         contacts += mines.filter { mine in
             mine.phase != .spent && hypot(mine.position.x - position.x, mine.position.y - position.y) <= 400
         }.map { contact(id: "mine-\($0.id)", kind: .mine, point: $0.position) }
@@ -633,19 +608,36 @@ final class GameEngine: NSObject, ObservableObject {
 
     var sectorOverview: String {
         if zone == .bossCave { return accessibilityStatus + ". " + accessibilitySurroundings }
-        let objective = hasBlackBox
-            ? A11yL10n.text("a11y.objective.base", defaultValue: "Доставить чёрный ящик на базу")
-            : A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик")
+        let objective: String
+        if (mission == nil || mission == .aster) && missionRun?.returningEarly != true {
+            objective = hasBlackBox
+                ? A11yL10n.text("a11y.objective.base", defaultValue: "Доставить чёрный ящик на базу")
+                : A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик")
+        } else {
+            objective = objectiveText
+        }
         let nearby = sonarContacts.prefix(3).map(A11yL10n.contact).joined(separator: "; ")
         let remaining = pickups.filter { !$0.collected }.count
+        let flows = level.currents.map {
+            "Течение \(AccessibilityNavigation.clockHour(from: .zero, to: CGPoint(x: $0.velocity.dx, y: $0.velocity.dy))) часов"
+        }.joined(separator: ". ")
         return A11yL10n.format("a11y.map.overview.format",
                                defaultValue: "Обзор сектора. Цель: %@. Ближайшие контакты: %@. Осталось находок: %lld.",
-                               objective, nearby, Int64(remaining))
+                               objective, nearby, Int64(remaining)) + ". " + flows
+            + (mission == .silentSignal ? ". " + (missionRun?.signals ?? []).map {
+                "\($0.finding == .drone && missionRun?.droneRecovered == true ? "Место находки — аппарат на борту" : $0.label), \(directionAndDistance(to: $0.position))"
+            }.joined(separator: ". ") : "")
     }
     var worldSize: CGSize { zone == .bossCave ? Self.caveSize : level.size }
     var objectiveText: String {
         if zone == .bossCave { return "Переживи нападение · \(Int(ceil(bossTimeRemaining))) с" }
-        return hasBlackBox ? "Вернись на базу" : "Найди чёрный ящик"
+        if returningToBase { return objectiveReady ? "Вернись на базу" : "Курс на базу · задание не выполнено" }
+        switch mission {
+        case .currentStation: return "Доставь оборудование на станцию"
+        case .silentSignal:
+            return missionRun?.foundDrone == nil ? "Проверь сигналы сонаром" : "Подбери аппарат «Луч»"
+        default: return "Найди чёрный ящик"
+        }
     }
 
     var accessibilityStatus: String {
@@ -663,7 +655,7 @@ final class GameEngine: NSObject, ObservableObject {
             }
             return "Спрут впереди. Следующий удар ещё не обозначен."
         }
-        var parts = ["Цель \(directionAndDistance(to: target))."]
+        var parts = ["\(targetLabel) \(directionAndDistance(to: target))."]
         if let portal, portalRevealed {
             parts.append("Портал в пещеру \(directionAndDistance(to: portal.position)).")
         }
@@ -673,6 +665,144 @@ final class GameEngine: NSObject, ObservableObject {
             parts.append("Ближайшая мина \(directionAndDistance(to: mine.position)).")
         }
         return parts.joined(separator: " ")
+    }
+
+    var objectiveReady: Bool {
+        switch mission {
+        case .currentStation: missionRun?.equipmentDelivered == true
+        case .silentSignal: missionRun?.droneRecovered == true
+        default: hasBlackBox
+        }
+    }
+    var returningToBase: Bool { objectiveReady || missionRun?.returningEarly == true }
+    var targetLabel: String {
+        if zone == .bossCave { return "Спрут" }
+        if returningToBase { return "База" }
+        switch mission {
+        case .currentStation: return "Станция «Течение»"
+        case .silentSignal:
+            return missionRun?.foundDrone?.label
+                ?? missionRun?.nearestUnidentified(to: position)?.name ?? "Сигналы"
+        default: return A11yL10n.pickupName(.blackBox)
+        }
+    }
+    var missionLandmarks: [MissionLandmark] {
+        if mission == .silentSignal {
+            return (missionRun?.signals ?? []).map {
+                MissionLandmark(id: "signal-\($0.id)", position: $0.position,
+                    label: $0.finding == .drone && missionRun?.droneRecovered == true ? "Место находки · аппарат на борту" : $0.label,
+                    kind: $0.finding == .drone && missionRun?.droneRecovered == true ? .recovered
+                        : ($0.finding == .drone ? .drone : ($0.finding == .buoy ? .buoy : .signal)))
+            }
+        }
+        return [MissionLandmark(id: "destination", position: level.wreck,
+                               label: mission == .currentStation ? "Станция «Течение»" : "Астер",
+                               kind: mission == .currentStation ? .station : .wreck)]
+    }
+    var missionPhase: String {
+        if outcome != nil { return outcome!.rawValue }
+        if objectiveReady { return "returnWithObjective" }
+        if missionRun?.returningEarly == true { return "returnEarly" }
+        if mission == .silentSignal { return missionRun?.foundDrone == nil ? "search" : "recoverDrone" }
+        return mission == .currentStation ? "deliverEquipment" : "recoverBlackBox"
+    }
+    var missionMetadata: [String: String] {
+        ["missionID": mission?.rawValue ?? CampaignMission.aster.rawValue,
+         "missionTitle": mission?.title ?? CampaignMission.aster.title,
+         "mapVersion": "1", "phase": missionPhase]
+    }
+    var missionStatus: String {
+        if returningToBase && !objectiveReady { return "Возвращаемся без выполнения задания" }
+        switch mission {
+        case .currentStation: return objectiveReady ? "Оборудование доставлено" : "Оборудование на борту"
+        case .silentSignal:
+            if objectiveReady { return "Аппарат на борту" }
+            if missionRun?.foundDrone == nil, let signal = missionRun?.nearestUnidentified(to: position),
+               hypot(signal.position.x - position.x, signal.position.y - position.y) < MissionRun.scanRadius {
+                return "Сигнал рядом — включи сонар"
+            }
+            return "Проверено \(missionRun?.checkedCount ?? 0) из 3 сигналов"
+        default: return hasBlackBox ? "Ящик на борту" : "Ящик ещё на «Астере»"
+        }
+    }
+    var resultDetail: String {
+        if outcome == .returned {
+            return "Добыча на базе. Задание не выполнено, следующая экспедиция не открыта. Можно попробовать снова."
+        }
+        return mission?.successStory ?? "Чёрный ящик на базе. Хорошая работа, капитан."
+    }
+
+    @discardableResult
+    func selectMission(_ mission: CampaignMission) -> Bool {
+        guard isCampaign, state == .ready, campaignProgress.isUnlocked(mission) else { return false }
+        campaignProgress.selected = mission
+        campaignProgress.save(to: defaults)
+        level = mission.level
+        missionRun = nil
+        outcome = nil
+        hasBlackBox = false
+        position = level.spawn
+        pickups = level.pickups
+        mines = level.mines
+        bestScore = campaignProgress.bestScores[mission.rawValue] ?? 0
+        updateCamera(dt: 1, snap: true)
+        objectWillChange.send()
+        return true
+    }
+
+    func setReturnToBase(_ requested: Bool) {
+        guard isCampaign, (state == .playing || state == .paused), zone == .ocean,
+              !objectiveReady, missionRun?.returningEarly != requested else { return }
+        missionRun?.returningEarly = requested
+        steering = .zero
+        accessibilityMoveRemaining = 0
+        recordMission(requested ? "return.requested" : "return.cancelled",
+                      requested ? "Курс на базу. Остановись в круге базы, чтобы сохранить добычу."
+                          : "Продолжаем задание. Найденные контакты сохранены.")
+        objectWillChange.send()
+    }
+
+    private func recordMission(_ kind: String, _ message: String, extra: [String: String] = [:]) {
+        let fields = missionMetadata.merging(extra) { _, new in new }
+        journal(kind, fields)
+        log(kind, message)
+        logWatch(kind, message)
+        log(message)
+        events.send(.diagnostic(.info, .event, kind, fields))
+        announce(message, duration: 6)
+    }
+
+    @discardableResult
+    private func scanMissionSignal() -> Bool {
+        guard zone == .ocean, let signal = missionRun?.scan(from: position) else { return false }
+        let message = signal.finding == .drone
+            ? "\(signal.name): найден аппарат «Луч». Подойди, чтобы взять его на борт."
+            : "\(signal.name): старый буй. Проверь следующий сигнал."
+        recordMission("signal.checked", message,
+                      extra: ["signal": String(signal.id), "finding": signal.finding.rawValue])
+        return true
+    }
+
+    private func updateMission() {
+        if sonarRemaining > 0 { scanMissionSignal() }
+        if mission == .currentStation, missionRun?.equipmentDelivered == false,
+           hypot(position.x - level.wreck.x, position.y - level.wreck.y) < 68, speed < 48 {
+            missionRun?.equipmentDelivered = true
+            recordMission("equipment.delivered", "Станция снова на связи. Вернись на базу: на западной стороне поток идёт к дому.")
+        }
+        if mission == .currentStation, missionRun?.currentHintShown == false {
+            let flow = current(at: position)
+            if hypot(flow.dx, flow.dy) > 30 {
+                missionRun?.currentHintShown = true
+                recordMission("current.hint", "Поток несёт лодку даже без тяги. Направления течений видны на карте.")
+            }
+        }
+        if mission == .silentSignal, missionRun?.droneRecovered == false,
+           let drone = missionRun?.foundDrone, hypot(position.x - drone.position.x, position.y - drone.position.y) < 39 {
+            missionRun?.droneRecovered = true
+            pickupCount += 1
+            recordMission("drone.recovered", "Аппарат «Луч» на борту. Вернись на базу.")
+        }
     }
 
     func owns(_ style: SubmarineStyle) -> Bool { garage.unlocked.contains(style) }
@@ -714,7 +844,10 @@ final class GameEngine: NSObject, ObservableObject {
     private var restoredPause = false
 
     func snapshot() -> ExpeditionSnapshot {
-        if state == .paused, let pausedSnapshot { return pausedSnapshot }
+        if state == .paused, var saved = pausedSnapshot {
+            saved.missionRun = missionRun
+            return saved
+        }
         return ExpeditionSnapshot(id: expeditionID,
             level: level,
             position: position,
@@ -770,12 +903,20 @@ final class GameEngine: NSObject, ObservableObject {
             accumulator: accumulator,
             nextLeakAt: nextLeakAt,
             nextSnapshotAt: nextSnapshotAt,
-            nextSnapshot: nextSnapshot)
+            nextSnapshot: nextSnapshot,
+            missionRun: missionRun)
     }
 
     func restore(_ saved: ExpeditionSnapshot) {
         pausedSnapshot = nil
         restoredPause = true
+        missionRun = saved.missionRun ?? (isCampaign ? MissionRun(mission: .aster, randomValue: 0) : nil)
+        if let mission = missionRun?.mission {
+            campaignProgress.selected = mission
+            bestScore = campaignProgress.bestScores[mission.rawValue] ?? 0
+            campaignProgress.save(to: defaults)
+        }
+        outcome = nil
         level = saved.level
         position = saved.position
         velocity = saved.velocity
@@ -843,9 +984,13 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func startGame() {
+        guard !isCampaign || campaignProgress.isUnlocked(campaignProgress.selected) else { return }
         recovery?.deleteSave()
         pausedSnapshot = nil
-        if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "restart") }
+        if state == .playing || state == .paused {
+            outcome = .abandoned
+            endJournal(result: ExpeditionOutcome.abandoned.rawValue, reason: "restart")
+        }
         lastSnapshotTime = -1
         lastSteeringTime = -1
         closeJournal("Экспедиция прервана: начато новое погружение")
@@ -860,6 +1005,10 @@ final class GameEngine: NSObject, ObservableObject {
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
+        if let mission {
+            missionRun = MissionRun(mission: mission, randomValue: mission == .silentSignal ? randomValue() : 0)
+        }
+        outcome = nil
         position = level.spawn
         velocity = .zero
         steering = .zero
@@ -901,9 +1050,12 @@ final class GameEngine: NSObject, ObservableObject {
         state = .playing
         journalOpen = true
         nextSnapshot = 5
-        log("start", "Дело открыто: экспедиция за чёрным ящиком")
+        log("start", "Дело открыто: \(mission?.title ?? "Экспедиция за чёрным ящиком")")
+        logWatch("mission.start", mission?.briefing ?? "Экспедиция за чёрным ящиком")
+        if mission != nil { events.send(.diagnostic(.info, .event, "mission.start", missionMetadata)) }
         log("Экспедиция началась", phrase: "Капитан: погружаемся!")
-        announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
+        announce(mission.map { _ in objectiveText }
+                 ?? A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
         updateCamera(dt: 1, snap: true)
         journal("start")
         navigate(to: "Game", reason: "start")
@@ -913,6 +1065,7 @@ final class GameEngine: NSObject, ObservableObject {
     func returnToMenu() {
         guard recovery?.save(exiting: true) != false else { pause(); return }
         navigate(to: "Welcome", reason: "surface")
+        if recovery == nil { outcome = .abandoned }
         if state == .playing || state == .paused { endJournal(result: recovery == nil ? "abandoned" : "suspended", reason: "surface") }
         closeJournal(recovery == nil ? "Экспедиция прервана: возвращение в меню" : "Экспедиция сохранена: возвращение в меню")
         log("Возвращение в меню")
@@ -928,7 +1081,26 @@ final class GameEngine: NSObject, ObservableObject {
 #if DEBUG
     /// Deterministic, non-production states used only by accessibility audits.
     func prepareAccessibilityAuditState(_ requestedState: String) {
+        if isCampaign {
+            if requestedState == "campaignClean" {
+                campaignProgress = CampaignProgress()
+                _ = selectMission(.aster)
+            } else if requestedState == "station" || requestedState == "search" {
+                campaignProgress.completed = requestedState == "station" ? [.aster] : [.aster, .currentStation]
+                _ = selectMission(requestedState == "station" ? .currentStation : .silentSignal)
+            } else if requestedState != "ready" {
+                _ = selectMission(.aster)
+            }
+        }
         switch requestedState {
+        case "readyClean": recovery?.deleteSave()
+        case "station", "search": startGame(); pause()
+        case "returned":
+            startGame()
+            samples = 1
+            missionRun?.returningEarly = true
+            position = level.base
+            finish(success: true)
         case "playing": startGame()
         case "paused", "map": startGame(); pause()
         case "journal":
@@ -1008,7 +1180,10 @@ final class GameEngine: NSObject, ObservableObject {
         sonarCooldown = 8
         log("sonar", "Сонар: поиск находок")
         revealNearby(radius: 680)
-        if let portal, hypot(position.x - portal.position.x, position.y - portal.position.y) < 680 {
+        let scannedSignal = scanMissionSignal()
+        if scannedSignal {
+            // The identified contact is announced by the mission transition.
+        } else if let portal, hypot(position.x - portal.position.x, position.y - portal.position.y) < 680 {
             portalRevealed = true
             announce(A11yL10n.text("event.portal.revealed", defaultValue: "Сонар обнаружил портал в пещеру"), duration: 3.5)
         } else {
@@ -1173,13 +1348,14 @@ final class GameEngine: NSObject, ObservableObject {
             updateMines(delta)
             guard state == .playing else { return }
             collectNearby()
+            updateMission()
             updatePortal()
         } else {
             updateBoss(delta)
         }
         guard state == .playing else { return }
         if energy <= 0 { finish(success: false, reason: .energy); return }
-        if zone == .ocean, hasBlackBox, hypot(position.x - level.base.x, position.y - level.base.y) < 68, speed < 48 {
+        if zone == .ocean, returningToBase, hypot(position.x - level.base.x, position.y - level.base.y) < 68, speed < 48 {
             finish(success: true)
         }
         if zone == .ocean, let last = trail.last, hypot(last.x - position.x, last.y - position.y) > 35 {
@@ -1218,7 +1394,7 @@ final class GameEngine: NSObject, ObservableObject {
             let strike = bossStrike.flatMap { strike in
                 strike.phase == .warning ? contact("tentacle", A11yL10n.contactKind(.tentacle), strike.position) : nil
             }
-            return SituationSummary(zone: String(describing: zone), position: position, energy: energy, hull: hull, depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
+            return SituationSummary(zone: String(describing: zone), position: position, energy: energy, hull: hull, targetName: targetLabel, depth: depth, speed: Int(speed * 0.16), returning: returningToBase,
                 targetDistance: targetDistance, targetCourse: CompassCourse.n,
                 danger: strike, find: nil, currentCourse: nil, currentSpeed: 0,
                 caveTimeRemaining: Int(ceil(bossTimeRemaining)))
@@ -1234,7 +1410,7 @@ final class GameEngine: NSObject, ObservableObject {
             contact("pickup:\($0.id)", A11yL10n.pickupName($0.kind), $0.position)
         }
         let flow = current(at: position)
-        return SituationSummary(zone: String(describing: zone), position: position, energy: energy, hull: hull, depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
+        return SituationSummary(zone: String(describing: zone), position: position, energy: energy, hull: hull, targetName: targetLabel, depth: depth, speed: Int(speed * 0.16), returning: returningToBase,
             targetDistance: targetDistance, targetCourse: CompassCourse(vector: CGVector(dx: target.x - position.x, dy: target.y - position.y)),
             danger: dangers.min { $0.distance < $1.distance }, find: finds.min { $0.distance < $1.distance },
             currentCourse: hypot(flow.dx, flow.dy) > 0.1 ? CompassCourse(vector: flow) : nil,
@@ -1485,10 +1661,10 @@ final class GameEngine: NSObject, ObservableObject {
             announce(A11yL10n.text("event.hull.critical", defaultValue: "Внимание. Корпус: 1 из 3."), urgent: true)
         }
         let distanceToBase = hypot(position.x - level.base.x, position.y - level.base.y)
-        let tooFast = zone == .ocean && hasBlackBox && distanceToBase < 68 && speed >= 48
+        let tooFast = zone == .ocean && returningToBase && distanceToBase < 68 && speed >= 48
         if tooFast && !dockingTooFast { events.send(.diagnostic(.warning, .control, "docking.denied", ["reason": "speed", "speed": String(Double(speed))])) }
         dockingTooFast = tooFast
-        if zone == .ocean, state == .playing, hasBlackBox, distanceToBase < 180, !announcedDockingHint {
+        if zone == .ocean, state == .playing, returningToBase, distanceToBase < 180, !announcedDockingHint {
             announcedDockingHint = true
             announce(A11yL10n.text("event.docking", defaultValue: "База рядом. Остановись в круге базы для швартовки."))
         }
@@ -1511,6 +1687,7 @@ final class GameEngine: NSObject, ObservableObject {
                              details: ["hull": String(hull), "energy": String(Int(energy)),
                                        "depth": String(depth), "cargo": String(cargoValue),
                                        "seconds": String(Int(runElapsed)), "zone": String(describing: zone),
+                                       "missionID": mission?.rawValue ?? CampaignMission.aster.rawValue, "phase": missionPhase,
                                        "reason": reason])
     }
 
@@ -1534,15 +1711,19 @@ final class GameEngine: NSObject, ObservableObject {
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         guard state == .playing else { return }
-        recovery?.record(success ? "completed" : "gameOver", title: success ? "Экспедиция завершена" : "Экспедиция потеряна", text: "История сохранена. Продолжение недоступно.")
+        let fullSuccess = success && objectiveReady
+        outcome = success ? (fullSuccess ? .completed : .returned) : .gameOver
+        let result = outcome!.rawValue
+        recovery?.record(result, title: success ? "Экспедиция завершена" : "Экспедиция потеряна", text: "История сохранена. Продолжение недоступно.")
         recovery?.deleteSave()
         defer {
             if success { journal("docking") }
-            journal(success ? "completed" : "gameOver")
-            navigate(to: "Result", reason: success ? "completed" : "gameOver")
-            endJournal(result: success ? "completed" : "gameOver", reason: success ? "docking" : String(describing: reason))
+            journal(result)
+            navigate(to: "Result", reason: result)
+            endJournal(result: result, reason: success ? "docking" : String(describing: reason))
         }
-        logWatch(success ? "success" : "failure", success ? "Экспедиция доставила груз" : "Экспедиция потеряна", reason: success ? "docked" : String(describing: reason))
+        logWatch(result, success ? "Экспедиция вернулась на базу" : "Экспедиция потеряна",
+                 reason: success ? "docked" : String(describing: reason))
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -1551,14 +1732,23 @@ final class GameEngine: NSObject, ObservableObject {
         if success {
             score = cargoValue
             events.send(.success(score))
-            if score > bestScore {
-                events.send(.record(score))
-                bestScore = score
-                defaults.set(score, forKey: Self.bestKey)
+            if fullSuccess {
+                if let mission {
+                    campaignProgress.complete(mission, score: score)
+                    campaignProgress.save(to: defaults)
+                }
+                if score > bestScore {
+                    events.send(.record(score))
+                    bestScore = score
+                    if mission == nil || mission == .aster { defaults.set(score, forKey: Self.bestKey) }
+                }
             }
             state = .completed
-            closeJournal("Чёрный ящик доставлен. Добыча: \(score)")
-            log("Экспедиция завершена. Доставлено: \(score)")
+            closeJournal(fullSuccess
+                ? "Задание выполнено. \(mission?.title ?? "Чёрный ящик доставлен"). Добыча: \(score)"
+                : "Добыча доставлена: \(score). Задание не выполнено.")
+            log(fullSuccess ? "Экспедиция завершена. Доставлено: \(score)"
+                : "Вернулись без выполнения задания. Доставлено: \(score)")
         } else {
             if reason == .energy { events.send(.danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась"))) }
             failureReason = reason
@@ -1641,4 +1831,5 @@ struct ExpeditionSnapshot: Codable {
     var nextLeakAt: TimeInterval
     var nextSnapshotAt: TimeInterval
     var nextSnapshot: TimeInterval
+    var missionRun: MissionRun? = nil
 }

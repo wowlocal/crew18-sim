@@ -27,6 +27,11 @@
 		F10000000000000000000006 /* BlackBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000006; };
 		F10000000000000000000007 /* BlackBoxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000007; };
 		F10000000000000000000008 /* ExpeditionLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000008; };
+		C10000000000000000000001 /* OceanLevel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001; };
+		C10000000000000000000002 /* CampaignMission.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000002; };
+		C10000000000000000000003 /* CampaignView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003; };
+		C10000000000000000000004 /* GameTestPilot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000004; };
+		C10000000000000000000005 /* CampaignTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000005; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +74,11 @@
 		F20000000000000000000006 /* BlackBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBox.swift; sourceTree = "<group>"; };
 		F20000000000000000000007 /* BlackBoxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBoxView.swift; sourceTree = "<group>"; };
 		F20000000000000000000008 /* ExpeditionLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionLogTests.swift; sourceTree = "<group>"; };
+		C20000000000000000000001 /* OceanLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OceanLevel.swift; sourceTree = "<group>"; };
+		C20000000000000000000002 /* CampaignMission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignMission.swift; sourceTree = "<group>"; };
+		C20000000000000000000003 /* CampaignView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignView.swift; sourceTree = "<group>"; };
+		C20000000000000000000004 /* GameTestPilot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameTestPilot.swift; sourceTree = "<group>"; };
+		C20000000000000000000005 /* CampaignTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -115,6 +125,9 @@
 				A20000000000000000000001 /* PodlodkaDiveApp.swift */,
 				A20000000000000000000002 /* GameView.swift */,
 				D20000000000000000000001 /* VoiceOverAnnouncer.swift */,
+				C20000000000000000000001 /* OceanLevel.swift */,
+				C20000000000000000000002 /* CampaignMission.swift */,
+				C20000000000000000000003 /* CampaignView.swift */,
 				A20000000000000000000003 /* GameEngine.swift */,
                 E20000000000000000000001,
 				F20000000000000000000007 /* BlackBoxView.swift */,
@@ -134,6 +147,8 @@
 		A70000000000000000000003 /* PodlodkaDiveTests */ = {
 			isa = PBXGroup;
 			children = (
+				C20000000000000000000004 /* GameTestPilot.swift */,
+				C20000000000000000000005 /* CampaignTests.swift */,
 				A20000000000000000000006 /* GameEngineTests.swift */,
 				F20000000000000000000008 /* ExpeditionLogTests.swift */,
 			);
@@ -300,6 +315,9 @@
 				A10000000000000000000001 /* PodlodkaDiveApp.swift in Sources */,
 				A10000000000000000000002 /* GameView.swift in Sources */,
 				D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */,
+				C10000000000000000000001 /* OceanLevel.swift in Sources */,
+				C10000000000000000000002 /* CampaignMission.swift in Sources */,
+				C10000000000000000000003 /* CampaignView.swift in Sources */,
 				A10000000000000000000003 /* GameEngine.swift in Sources */,
                 E10000000000000000000001,
 				F10000000000000000000007 /* BlackBoxView.swift in Sources */,
@@ -317,6 +335,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C10000000000000000000004 /* GameTestPilot.swift in Sources */,
+				C10000000000000000000005 /* CampaignTests.swift in Sources */,
 				A10000000000000000000006 /* GameEngineTests.swift in Sources */,
 				F10000000000000000000008 /* ExpeditionLogTests.swift in Sources */,
 			);
