@@ -394,12 +394,16 @@ final class GameEngine: NSObject, ObservableObject {
         receiptJournal.flush()
     }
 
+    let captainLogger: CaptainLogger
+    private var expeditionID = UUID()
     let events = PassthroughSubject<GameEvent, Never>()
     @Published private(set) var state: RunState = .ready {
         didSet {
             if oldValue != state {
                 events.send(.stateChanged(state))
                 log("state", "Режим: \(state)")
+                logWatch("state", "Состояние: \(oldValue) → \(state)")
+                captainLogger.flush()
             }
         }
     }
@@ -482,6 +486,7 @@ final class GameEngine: NSObject, ObservableObject {
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
          journal: any ExpeditionLogging = ExpeditionJournal.shared,
+         captainLogger: CaptainLogger = .shared,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
         var saved = GarageSave()
         if let data = defaults.data(forKey: Self.garageKey) {
@@ -493,6 +498,7 @@ final class GameEngine: NSObject, ObservableObject {
         if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
         garage = saved
         self.receiptJournal = journal
+        self.captainLogger = captainLogger
         self.defaults = defaults
         self.level = level
         self.randomValue = randomValue
@@ -648,6 +654,7 @@ final class GameEngine: NSObject, ObservableObject {
         lastSnapshotTime = -1
         lastSteeringTime = -1
         closeJournal("Экспедиция прервана: начато новое погружение")
+        expeditionID = UUID()
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
@@ -771,8 +778,9 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateBoost() {
-        guard canBoost else { log("ability.rejected", "Форсаж недоступен: заряд или перезарядка", severity: "warning"); journal("error", ["message": "boost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Boost", "reason": state != .playing ? "state" : boostCooldown > 0 ? "cooldown" : "energy"])); return }
+        guard canBoost else { logWatch("rejected.boost", "Форсаж недоступен"); log("ability.rejected", "Форсаж недоступен: заряд или перезарядка", severity: "warning"); journal("error", ["message": "boost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Boost", "reason": state != .playing ? "state" : boostCooldown > 0 ? "cooldown" : "energy"])); return }
         defer { journal("boost") }
+        logWatch("boost", "Включён форсаж")
         let length = inputStrength
         boostDirection = length > 0.08
             ? CGVector(dx: steering.dx / length, dy: steering.dy / length)
@@ -787,7 +795,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateSonar() {
-        guard canSonar else { log("ability.rejected", "Сонар недоступен", severity: "warning"); journal("error", ["message": "sonar unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Sonar", "reason": state != .playing ? "state" : sonarCooldown > 0 ? "cooldown" : "energy"])); return }
+        guard canSonar else { logWatch("rejected.sonar", "Сонар перезаряжается"); log("ability.rejected", "Сонар недоступен", severity: "warning"); journal("error", ["message": "sonar unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Sonar", "reason": state != .playing ? "state" : sonarCooldown > 0 ? "cooldown" : "energy"])); return }
         defer { journal("sonar") }
         sonarRemaining = 5
         sonarCooldown = 8
@@ -803,7 +811,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateLightBoost() {
-        guard canLightBoost else { log("ability.rejected", "Усилитель фар недоступен", severity: "warning"); journal("error", ["message": "lightBoost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "LightBoost", "reason": state != .playing ? "state" : lightBoostCooldown > 0 ? "cooldown" : "energy"])); return }
+        guard canLightBoost else { logWatch("rejected.light", "Усилитель фар недоступен"); log("ability.rejected", "Усилитель фар недоступен", severity: "warning"); journal("error", ["message": "lightBoost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "LightBoost", "reason": state != .playing ? "state" : lightBoostCooldown > 0 ? "cooldown" : "energy"])); return }
         defer { journal("lightBoost") }
         energy -= Self.lightBoostCost
         log("light", "Усилены фары: −5 энергии")
@@ -968,6 +976,7 @@ final class GameEngine: NSObject, ObservableObject {
         announceThresholdsAndDocking()
         updateCamera(dt: dt)
         summaryTicks += 1
+        if state == .playing && summaryTicks % 1200 == 0 { logWatch("snapshot", "Плановая сверка приборов") }
         if state == .playing && summaryTicks % 30 == 0 { events.send(.situation(situationSummary)) }
     }
 
@@ -975,6 +984,7 @@ final class GameEngine: NSObject, ObservableObject {
         if energy <= 25 && !didWarnEnergy {
             didWarnEnergy = true
             log("energy.low", "Осталось менее 25% энергии", severity: "warning")
+            logWatch("energy.low", "Критический заряд батареи")
             events.send(.energyLow)
         }
     }
@@ -1265,10 +1275,20 @@ final class GameEngine: NSObject, ObservableObject {
 
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
         log("notice", text, severity: urgent ? "warning" : "info")
+        logWatch(urgent ? "danger" : "event", text)
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
         accessibilityAnnouncementRevision += 1
+    }
+
+    func logWatch(_ event: String, _ message: String, reason: String = "") {
+        let sobriety = CaptainLogger.Sobriety(rawValue: defaults.string(forKey: "podlodkaDive.captainSobriety") ?? "") ?? .sober
+        captainLogger.record(event, message: message, expedition: expeditionID, sobriety: sobriety,
+                             details: ["hull": String(hull), "energy": String(Int(energy)),
+                                       "depth": String(depth), "cargo": String(cargoValue),
+                                       "seconds": String(Int(runElapsed)), "zone": String(describing: zone),
+                                       "reason": reason])
     }
 
     private func directionAndDistance(to point: CGPoint) -> String {
@@ -1297,6 +1317,7 @@ final class GameEngine: NSObject, ObservableObject {
             navigate(to: "Result", reason: success ? "completed" : "gameOver")
             endJournal(result: success ? "completed" : "gameOver", reason: success ? "docking" : String(describing: reason))
         }
+        logWatch(success ? "success" : "failure", success ? "Экспедиция доставила груз" : "Экспедиция потеряна", reason: success ? "docked" : String(describing: reason))
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0

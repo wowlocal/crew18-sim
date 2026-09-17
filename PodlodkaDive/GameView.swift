@@ -19,6 +19,7 @@ struct GameView: View {
     @State private var showingJournal = false
     @State private var showingReplay = false
     @State private var showingBureau = false
+    @State private var showingCaptainJournal = false
     @State private var pendingStyle: SubmarineStyle?
     @State private var garageMessage = ""
 
@@ -95,6 +96,7 @@ struct GameView: View {
             if phase != .active {
                 captain.finish(recorder: recorder)
                 engine.pause()
+                engine.captainLogger.flush()
                 let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Expedition flush")
                 Task {
                     await engine.flushJournal()
@@ -153,6 +155,7 @@ struct GameView: View {
             }
         }
         .sheet(isPresented: $showingBureau) { BureauView(journal: .shared) }
+        .sheet(isPresented: $showingCaptainJournal) { CaptainJournalView(logger: engine.captainLogger) }
 
     }
 
@@ -214,6 +217,10 @@ struct GameView: View {
                     .accessibilityLabel(A11yL10n.format("a11y.best.format", defaultValue: "Лучшая доставленная добыча: %lld", Int64(engine.bestScore)))
             }
             .padding(.top, max(insets.top, 48) + 12)
+            Button("Вахтенный журнал") { showingJournal = true }
+                .foregroundStyle(.white).frame(minHeight: 44)
+                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
+                .buttonStyle(.bordered)
             VStack(spacing: 12) {
                 Text("СВОБОДНЫЙ ОКЕАН")
                     .font(.system(.body, design: .monospaced).weight(.semibold))
@@ -474,6 +481,7 @@ struct GameView: View {
     }
 
     private func openMap() {
+        engine.logWatch("map", "Открыта карта экспедиции")
         engine.pauseForScreen("Map")
         showingMap = true
     }
@@ -659,6 +667,10 @@ struct GameView: View {
         let title = paused ? "Можно выдохнуть." : (success ? "Груз доставлен." : "Океан сильнее.")
         let detail = paused ? "Экспедиция на паузе. Заряд сохраняется." : (success ? "Чёрный ящик на базе. Хорошая работа, капитан." : (engine.failureReason == .energy ? "Заряд закончился. Груз остался на глубине." : "Корпус не выдержал. Груз остался на глубине."))
         return VStack(spacing: 22) {
+            Button("Вахтенный журнал") { showingJournal = true }
+                .foregroundStyle(.white).frame(minHeight: 44)
+                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
+
             Image(systemName: paused ? "pause.fill" : (success ? "shippingbox.fill" : "water.waves"))
                 .font(.system(.title).weight(.medium)).foregroundStyle(success ? OceanPalette.gold : OceanPalette.teal)
                 .frame(width: 72, height: 72)
