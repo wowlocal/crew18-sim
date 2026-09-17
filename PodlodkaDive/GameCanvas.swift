@@ -34,6 +34,22 @@ struct GameCanvas: View {
                 drawLowVisibility(in: &context, size: size)
             }
             drawSubmarine(in: &context, size: size)
+            if engine.state == .playing, let leak = engine.journalLeak {
+                let age = engine.runElapsed - leak.startedAt
+                let boat = engine.screenPoint(engine.position)
+                let drift = reduceMotion ? 0 : age * 9
+                let width = min(260.0, size.width - 24)
+                let x = min(size.width - width / 2 - 12, max(width / 2 + 12, boat.x + leak.side * 24))
+                let y = max(30, boat.y - 65 - drift)
+                context.drawLayer { bubble in
+                    bubble.opacity = reduceMotion ? 1 : min(1, max(0, (3.5 - age) / 0.7))
+                    let rect = CGRect(x: x - width / 2, y: y - 26, width: width, height: 52)
+                    bubble.fill(Path(roundedRect: rect, cornerRadius: 16), with: .color(OceanPalette.ink.opacity(0.94)))
+                    bubble.stroke(Path(roundedRect: rect, cornerRadius: 16), with: .color(OceanPalette.teal.opacity(0.65)), lineWidth: 1)
+                    bubble.draw(Text(leak.phrase).font(.system(size: 13, weight: .medium)).foregroundColor(OceanPalette.teal),
+                                in: rect.insetBy(dx: 10, dy: 6))
+                }
+            }
             if engine.sonarRemaining > 0 && engine.state != .ready { drawSonar(in: &context) }
         }
         .background(OceanPalette.ink)

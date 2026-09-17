@@ -294,6 +294,10 @@ struct SituationSummary: Equatable {
         let distance: Int
         let course: CompassCourse
     }
+    var zone: String = "ocean"
+    var position: CGPoint = .zero
+    var energy: CGFloat = 100
+    var hull: Int = 3
     let depth: Int
     let speed: Int
     let returning: Bool
@@ -307,6 +311,9 @@ struct SituationSummary: Equatable {
 }
 
 enum GameEvent: Equatable {
+    case runStarted(UUID)
+    case runEnded(String)
+    case diagnostic(BlackBoxLevel, BlackBoxCategory, String, [String: String])
     case speak(String)
     case danger(String)
     case energyLow
@@ -317,12 +324,148 @@ enum GameEvent: Equatable {
     case situation(SituationSummary)
 }
 
+/// A bounded, session-local historical record written on events and periodic reports.
+struct ExpeditionLogEntry: Identifiable {
+    enum Level: String { case event = "Событие", warning = "Опасность", error = "Ошибка", state = "Состояние" }
+    let id = UUID()
+    let date = Date()
+    let expedition: Int
+    let seconds: TimeInterval
+    let level: Level
+    let message: String
+    let snapshot: String
+    let crewPhrase: String?
+}
+
+@MainActor
+final class CrewEventLog {
+    private(set) var entries: [ExpeditionLogEntry] = []
+    static let capacity = 500
+
+    func record(expedition: Int, seconds: TimeInterval, level: ExpeditionLogEntry.Level,
+                message: String, snapshot: String, crewPhrase: String? = nil) {
+        entries.append(ExpeditionLogEntry(expedition: expedition, seconds: seconds,
+                                          level: level, message: message, snapshot: snapshot, crewPhrase: crewPhrase))
+        if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
+    }
+}
+
+struct JournalLeak {
+    let phrase: String
+    let startedAt: TimeInterval
+    let side: CGFloat
+}
+
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
-    let events = PassthroughSubject<GameEvent, Never>()
-    @Published private(set) var state: RunState = .ready {
-        didSet { if oldValue != state { events.send(.stateChanged(state)) } }
+    private(set) var expeditionId: String?
+    private let telemetryLogger: ExpeditionLogger
+    private var telemetryOpen = false
+    private var journalTask: Task<Void, Never>?
+    private var lastSnapshotTime: Double = -1
+    private var lastSteeringTime: Double = -1
+    private var journalScreen = "Welcome"
+
+    func journal(_ type: String, _ extra: [String: String] = [:]) {
+        guard let id = expeditionId else { return }
+        var payload = journalState
+        payload.merge(extra) { _, new in new }
+        let prior = journalTask
+        journalTask = Task {
+            await prior?.value
+            await telemetryLogger.log(expeditionId: id, type: type,
+                category: type == "snapshot" ? "State" : (type == "error" ? "Errors" : "Gameplay"),
+                severity: type == "error" ? "error" : "info", payload: payload)
+        }
     }
+
+    private var journalState: [String: String] {
+        ["time": String(runElapsed), "x": String(Double(position.x)), "y": String(Double(position.y)),
+         "vx": String(Double(velocity.dx)), "vy": String(Double(velocity.dy)),
+         "heading": String(Double(atan2(velocity.dy, velocity.dx))), "energy": String(Double(energy)),
+         "hull": String(hull), "cargo": String(cargoValue), "samples": String(samples),
+         "blackBox": String(hasBlackBox), "shield": String(hasShield), "target": hasBlackBox ? "base" : "wreck",
+         "targetX": String(Double(target.x)), "targetY": String(Double(target.y)),
+         "zone": String(describing: zone), "width": String(Double(zone == .ocean ? level.size.width : Self.caveSize.width)),
+         "height": String(Double(zone == .ocean ? level.size.height : Self.caveSize.height)),
+         "pickups": pickups.filter { !$0.collected }.map { "\($0.id),\($0.kind.rawValue),\($0.position.x),\($0.position.y)" }.joined(separator: ";"),
+         "mines": mines.map { "\($0.id),\($0.phase),\($0.position.x),\($0.position.y),\($0.timer)" }.joined(separator: ";"),
+         "rocks": level.rocks.map { $0.vertices.map { "\($0.x),\($0.y)" }.joined(separator: ":") }.joined(separator: ";"),
+         "bossTime": String(bossTimeRemaining), "bossDefeated": String(bossDefeated),
+         "boost": String(boostRemaining), "sonar": String(sonarRemaining)]
+    }
+
+    func navigate(to screen: String, reason: String) {
+        guard screen != journalScreen else { return }
+        journal("navigation", ["fromScreen": journalScreen, "toScreen": screen, "reason": reason])
+        journalScreen = screen
+    }
+
+    func flushJournal() async {
+        await journalTask?.value
+        await telemetryLogger.flush()
+        receiptJournal.flush()
+        captainLogger.flush()
+    }
+
+    private func endJournal(result: String, reason: String) {
+        guard telemetryOpen else { return }
+        journal("end", ["result": result, "reason": reason])
+        telemetryOpen = false
+        events.send(.runEnded(result))
+    }
+
+    private let receiptJournal: any ExpeditionLogging
+    private(set) var diveID: UUID?
+    private var journalOpen = false
+    private var nextSnapshot: TimeInterval = 5
+
+    private func log(_ kind: String, _ message: String, severity: String = "info") {
+        guard journalOpen, let diveID else { return }
+        receiptJournal.record(JournalEntry(id: UUID(), diveID: diveID, date: Date(), elapsed: runElapsed,
+            kind: kind, severity: severity, message: message,
+            boat: BoatSnapshot(x: Double(position.x), y: Double(position.y), energy: Double(energy),
+                hull: hull, cargo: cargoValue, blackBox: hasBlackBox, shield: hasShield,
+                zone: String(describing: zone), state: String(describing: state), speed: Double(speed))))
+    }
+
+    private func closeJournal(_ outcome: String, severity: String = "info") {
+        log("finish", outcome, severity: severity)
+        journalOpen = false
+        receiptJournal.flush()
+    }
+
+    let captainLogger: CaptainLogger
+    private var expeditionID = UUID()
+    let events = PassthroughSubject<GameEvent, Never>()
+    let crewJournal = CrewEventLog()
+    private(set) var expeditionNumber = 0
+    private(set) var journalLeak: JournalLeak?
+    private var nextLeakAt: TimeInterval = 0
+    private var nextSnapshotAt: TimeInterval = 15
+    private var leakOnLeft = false
+
+    private func log(_ message: String, level: ExpeditionLogEntry.Level = .event, phrase: String? = nil) {
+        crewJournal.record(expedition: expeditionNumber, seconds: runElapsed, level: level,
+                       message: message, snapshot: "\(state) · \(zone) · \(accessibilityStatus)", crewPhrase: phrase)
+        if let phrase, state == .playing, runElapsed >= nextLeakAt {
+            leakOnLeft.toggle()
+            journalLeak = JournalLeak(phrase: phrase, startedAt: runElapsed, side: leakOnLeft ? -1 : 1)
+            nextLeakAt = runElapsed + 8
+        }
+    }
+
+    @Published private(set) var state: RunState = .ready {
+        didSet {
+            if oldValue != state {
+                events.send(.stateChanged(state))
+                log("state", "Режим: \(state)")
+                logWatch("state", "Состояние: \(oldValue) → \(state)")
+                captainLogger.flush()
+            }
+        }
+    }
+    private var dockingTooFast = false
     private var didWarnEnergy = false
     private var summaryTicks = 0
     @Published private(set) var elapsed: TimeInterval = 0
@@ -333,6 +476,7 @@ final class GameEngine: NSObject, ObservableObject {
     @Published private(set) var eventCount = 0
 
     @Published private var garage: GarageSave
+    private(set) var garageLoadError: String?
     private static let garageKey = "podlodkaDive.garage.v1"
     var crystals: Int { garage.crystals }
     var selectedStyle: SubmarineStyle { garage.selected }
@@ -399,13 +543,22 @@ final class GameEngine: NSObject, ObservableObject {
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
+         telemetryLogger: ExpeditionLogger = .shared,
+         journal: any ExpeditionLogging = ExpeditionJournal.shared,
+         captainLogger: CaptainLogger = .shared,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
-        var saved = defaults.data(forKey: Self.garageKey)
-            .flatMap { try? JSONDecoder().decode(GarageSave.self, from: $0) } ?? GarageSave()
+        var saved = GarageSave()
+        if let data = defaults.data(forKey: Self.garageKey) {
+            do { saved = try JSONDecoder().decode(GarageSave.self, from: data) }
+            catch { garageLoadError = error.localizedDescription }
+        }
         saved.crystals = max(0, saved.crystals)
         saved.unlocked.insert(.classic)
         if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
         garage = saved
+        self.telemetryLogger = telemetryLogger
+        self.receiptJournal = journal
+        self.captainLogger = captainLogger
         self.defaults = defaults
         self.level = level
         self.randomValue = randomValue
@@ -527,20 +680,22 @@ final class GameEngine: NSObject, ObservableObject {
     /// Purchases and equipment changes are allowed only before an expedition.
     @discardableResult
     func customize(_ style: SubmarineStyle) -> String {
-        guard state == .ready else { return "Открой гараж перед началом экспедиции." }
+        guard state == .ready else { events.send(.diagnostic(.warning, .event, "garage.denied", ["reason": "state"])); return "Открой гараж перед началом экспедиции." }
         let purchased = !owns(style)
         if purchased {
-            guard crystals >= style.price else { return "Не хватает кристаллов: нужно ещё \(style.price - crystals)." }
+            guard crystals >= style.price else { events.send(.diagnostic(.warning, .resource, "garage.denied", ["reason": "crystals", "style": style.rawValue])); return "Не хватает кристаллов: нужно ещё \(style.price - crystals)." }
             garage.crystals -= style.price
             garage.unlocked.insert(style)
         }
+        events.send(.diagnostic(.info, .event, purchased ? "garage.purchase" : "garage.equip", ["style": style.rawValue, "price": String(purchased ? style.price : 0)]))
         garage.selected = style
         saveGarage()
         return "\(purchased ? "Куплено и установлено" : "Установлено"): \(style.title). Баланс: \(crystals) кристаллов."
     }
 
     private func saveGarage() {
-        if let data = try? JSONEncoder().encode(garage) { defaults.set(data, forKey: Self.garageKey) }
+        do { defaults.set(try JSONEncoder().encode(garage), forKey: Self.garageKey) }
+        catch { events.send(.diagnostic(.error, .system, "garage.save.failed", ["reason": error.localizedDescription])) }
     }
 
     func resize(to size: CGSize) {
@@ -554,6 +709,18 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func startGame() {
+        if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "restart") }
+        lastSnapshotTime = -1
+        lastSteeringTime = -1
+        closeJournal("Экспедиция прервана: начато новое погружение")
+        expeditionID = UUID()
+        expeditionId = expeditionID.uuidString
+        diveID = expeditionID
+        telemetryOpen = true
+        expeditionNumber += 1
+        journalLeak = nil
+        nextLeakAt = 0
+        nextSnapshotAt = 15
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
@@ -593,12 +760,26 @@ final class GameEngine: NSObject, ObservableObject {
         previousTimestamp = nil
         announcedCriticalHull = false
         announcedDockingHint = false
+        dockingTooFast = false
+        events.send(.runStarted(expeditionID))
+        state = .playing
+        journalOpen = true
+        nextSnapshot = 5
+        log("start", "Дело открыто: экспедиция за чёрным ящиком")
+        log("Экспедиция началась", phrase: "Капитан: погружаемся!")
         announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
         updateCamera(dt: 1, snap: true)
-        state = .playing
+        journal("start")
+        navigate(to: "Game", reason: "start")
+        journal("snapshot")
     }
 
     func returnToMenu() {
+        navigate(to: "Welcome", reason: "surface")
+        if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "surface") }
+        closeJournal("Экспедиция прервана: возвращение в меню")
+        log("Возвращение в меню")
+        journalLeak = nil
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -613,6 +794,15 @@ final class GameEngine: NSObject, ObservableObject {
         switch requestedState {
         case "playing": startGame()
         case "paused", "map": startGame(); pause()
+        case "journal":
+            startGame()
+            setSteering(CGVector(dx: 1, dy: 0))
+            for _ in 0..<60 { step(deltaTime: 0.1) }
+            activateSonar()
+            for _ in 0..<60 { step(deltaTime: 0.1) }
+            hasBlackBox = true
+            journal("blackBox")
+            finish(success: true)
         case "completed":
             startGame()
             hasBlackBox = true
@@ -627,11 +817,23 @@ final class GameEngine: NSObject, ObservableObject {
 #endif
 
     func setSteering(_ vector: CGVector) {
-        guard state == .playing, vector.dx.isFinite, vector.dy.isFinite else { return }
+        guard vector.dx.isFinite, vector.dy.isFinite else { journal("error", ["message": "nonfinite steering"]); log("input.invalid", "Некорректная команда руля", severity: "error"); return }
+        guard state == .playing else { return }
+        let wasSteering = hypot(steering.dx, steering.dy) > 0
+        let wasMoving = inputStrength > 0
         accessibilityMoveRemaining = 0
+        if runElapsed - lastSteeringTime >= 0.25 || vector == .zero {
+            lastSteeringTime = runElapsed
+            journal("steering", ["dx": String(Double(vector.dx)), "dy": String(Double(vector.dy))])
+        }
         let length = hypot(vector.dx, vector.dy)
         if length < 0.08 { steering = .zero }
         else { steering = CGVector(dx: vector.dx / max(1, length), dy: vector.dy / max(1, length)) }
+        let isSteering = hypot(steering.dx, steering.dy) > 0
+        if wasSteering != isSteering { events.send(.diagnostic(.info, .control, "steering", ["active": String(isSteering)])) }
+        if wasMoving != (inputStrength > 0) {
+            log("steering", inputStrength > 0 ? "Включена тяга" : "Руль отпущен: торможение")
+        }
         objectWillChange.send()
     }
 
@@ -645,23 +847,29 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateBoost() {
-        guard canBoost else { return }
+        guard canBoost else { logWatch("rejected.boost", "Форсаж недоступен"); log("ability.rejected", "Форсаж недоступен: заряд или перезарядка", severity: "warning"); journal("error", ["message": "boost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Boost", "reason": state != .playing ? "state" : boostCooldown > 0 ? "cooldown" : "energy"])); return }
+        defer { journal("boost") }
+        logWatch("boost", "Включён форсаж")
         let length = inputStrength
         boostDirection = length > 0.08
             ? CGVector(dx: steering.dx / length, dy: steering.dy / length)
             : CGVector(dx: facing, dy: 0)
         energy -= Self.boostCost
+        log("boost", "Форсаж — батарейку списали: −7 энергии")
         checkEnergyWarning()
         boostRemaining = 1.1
         boostCooldown = 4.5
+        log("Форсаж включён", phrase: "Механик: полный вперёд!")
         if energy <= 0 { finish(success: false, reason: .energy) }
         objectWillChange.send()
     }
 
     func activateSonar() {
-        guard canSonar else { return }
+        guard canSonar else { logWatch("rejected.sonar", "Сонар перезаряжается"); log("ability.rejected", "Сонар недоступен", severity: "warning"); journal("error", ["message": "sonar unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Sonar", "reason": state != .playing ? "state" : sonarCooldown > 0 ? "cooldown" : "energy"])); return }
+        defer { journal("sonar") }
         sonarRemaining = 5
         sonarCooldown = 8
+        log("sonar", "Сонар: поиск находок")
         revealNearby(radius: 680)
         if let portal, hypot(position.x - portal.position.x, position.y - portal.position.y) < 680 {
             portalRevealed = true
@@ -673,8 +881,10 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateLightBoost() {
-        guard canLightBoost else { return }
+        guard canLightBoost else { logWatch("rejected.light", "Усилитель фар недоступен"); log("ability.rejected", "Усилитель фар недоступен", severity: "warning"); journal("error", ["message": "lightBoost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "LightBoost", "reason": state != .playing ? "state" : lightBoostCooldown > 0 ? "cooldown" : "energy"])); return }
+        defer { journal("lightBoost") }
         energy -= Self.lightBoostCost
+        log("light", "Усилены фары: −5 энергии")
         checkEnergyWarning()
         lightBoostRemaining = Self.lightBoostDuration
         lightBoostCooldown = Self.lightBoostRecharge
@@ -692,11 +902,17 @@ final class GameEngine: NSObject, ObservableObject {
         sectorOverview
     }
 
-    func pause() {
+    func pause() { pauseForScreen("Pause") }
+
+    func pauseForScreen(_ screen: String) {
         guard state == .playing else { return }
         steering = .zero
         accessibilityMoveRemaining = 0
         state = .paused
+        journal("pause")
+        navigate(to: screen, reason: screen == "Map" ? "openMap" : "pause")
+        receiptJournal.flush()
+        log("Экспедиция приостановлена", level: .state)
         accumulator = 0
         previousTimestamp = nil
     }
@@ -708,6 +924,9 @@ final class GameEngine: NSObject, ObservableObject {
             accumulator = 0
             previousTimestamp = nil
             state = .playing
+            journal("resume")
+            navigate(to: "Game", reason: "resume")
+            log("Экспедиция продолжена", level: .state)
         } else { pause() }
     }
 
@@ -727,7 +946,11 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func step(deltaTime raw: TimeInterval) {
-        guard raw.isFinite, raw > 0, state == .playing || state == .ready else { return }
+        guard raw.isFinite, raw > 0 else {
+            log("simulation.invalidDelta", "Некорректный шаг симуляции", severity: "error")
+            return
+        }
+        guard state == .playing || state == .ready else { return }
         let dt = min(raw, 0.1)
         if state == .playing {
             accumulator += dt
@@ -736,7 +959,15 @@ final class GameEngine: NSObject, ObservableObject {
                 accumulator = max(0, accumulator - Self.fixedStep)
             }
         }
+        if journalOpen && runElapsed >= nextSnapshot {
+            log("snapshot", "Показания приборов")
+            nextSnapshot = runElapsed + 5
+        }
         elapsed += dt
+        if state == .playing, runElapsed - lastSnapshotTime >= 1 {
+            lastSnapshotTime = runElapsed
+            journal("snapshot")
+        }
     }
 
     func current(at point: CGPoint) -> CGVector {
@@ -758,6 +989,12 @@ final class GameEngine: NSObject, ObservableObject {
     private func simulate(_ delta: TimeInterval) {
         let dt = CGFloat(delta)
         runElapsed += delta
+        if let leak = journalLeak, runElapsed - leak.startedAt >= 3.5 { journalLeak = nil }
+        if runElapsed >= nextSnapshotAt {
+            nextSnapshotAt = runElapsed + 15
+            log("Плановый доклад экипажа", level: .state,
+                phrase: energy <= 25 ? "Механик: бережём заряд!" : "Штурман: глубина \(depth) м")
+        }
         boostCooldown = max(0, boostCooldown - delta)
         lightBoostCooldown = max(0, lightBoostCooldown - delta)
         lightBoostRemaining = max(0, lightBoostRemaining - delta)
@@ -817,13 +1054,17 @@ final class GameEngine: NSObject, ObservableObject {
         announceThresholdsAndDocking()
         updateCamera(dt: dt)
         summaryTicks += 1
+        if state == .playing && summaryTicks % 1200 == 0 { logWatch("snapshot", "Плановая сверка приборов") }
         if state == .playing && summaryTicks % 30 == 0 { events.send(.situation(situationSummary)) }
     }
 
     private func checkEnergyWarning() {
         if energy <= 25 && !didWarnEnergy {
             didWarnEnergy = true
+            log("energy.low", "Осталось менее 25% энергии", severity: "warning")
+            logWatch("energy.low", "Критический заряд батареи")
             events.send(.energyLow)
+            log("Низкий заряд: пора возвращаться", level: .warning, phrase: "Механик: бережём заряд!")
         }
     }
 
@@ -836,7 +1077,7 @@ final class GameEngine: NSObject, ObservableObject {
             let strike = bossStrike.flatMap { strike in
                 strike.phase == .warning ? contact("tentacle", A11yL10n.contactKind(.tentacle), strike.position) : nil
             }
-            return SituationSummary(depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
+            return SituationSummary(zone: String(describing: zone), position: position, energy: energy, hull: hull, depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
                 targetDistance: targetDistance, targetCourse: CompassCourse.n,
                 danger: strike, find: nil, currentCourse: nil, currentSpeed: 0,
                 caveTimeRemaining: Int(ceil(bossTimeRemaining)))
@@ -852,7 +1093,7 @@ final class GameEngine: NSObject, ObservableObject {
             contact("pickup:\($0.id)", A11yL10n.pickupName($0.kind), $0.position)
         }
         let flow = current(at: position)
-        return SituationSummary(depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
+        return SituationSummary(zone: String(describing: zone), position: position, energy: energy, hull: hull, depth: depth, speed: Int(speed * 0.16), returning: hasBlackBox,
             targetDistance: targetDistance, targetCourse: CompassCourse(vector: CGVector(dx: target.x - position.x, dy: target.y - position.y)),
             danger: dangers.min { $0.distance < $1.distance }, find: finds.min { $0.distance < $1.distance },
             currentCourse: hypot(flow.dx, flow.dy) > 0.1 ? CompassCourse(vector: flow) : nil,
@@ -869,7 +1110,7 @@ final class GameEngine: NSObject, ObservableObject {
                 if impact < 0 {
                     velocity.dx -= hit.normal.dx * impact * 1.12
                     velocity.dy -= hit.normal.dy * impact * 1.12
-                    if -impact > 78 { takeDamage(); boostRemaining = 0 }
+                    if -impact > 78 { journal("collision", ["rock": String(rock.id)]); takeDamage(source: "reef"); boostRemaining = 0 }
                 }
             }
         }
@@ -889,6 +1130,7 @@ final class GameEngine: NSObject, ObservableObject {
             switch mines[index].phase {
             case .idle:
                 if distance < OceanMine.triggerRadius {
+                    journal("mine", ["id": String(mines[index].id), "phase": "armed"])
                     mines[index].phase = .armed
                     mines[index].timer = OceanMine.fuse
                     announce(A11yL10n.text("event.mine", defaultValue: "Мина активирована — отойди!"), duration: 1.5, urgent: true)
@@ -896,10 +1138,12 @@ final class GameEngine: NSObject, ObservableObject {
             case .armed:
                 mines[index].timer -= delta
                 if mines[index].timer <= 0 {
+                    journal("mine", ["id": String(mines[index].id), "phase": "exploding"])
                     mines[index].phase = .exploding
                     mines[index].timer = 0.65
+                    log("mine.explosion", "Взорвалась мина \(mines[index].id)", severity: "warning")
                     if distance < OceanMine.blastRadius + Self.hullRadius {
-                        takeDamage()
+                        takeDamage(source: "mine")
                         let length = max(1, distance)
                         velocity.dx += (position.x - mines[index].position.x) / length * 110
                         velocity.dy += (position.y - mines[index].position.y) / length * 110
@@ -932,6 +1176,8 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func updatePortal() {
+        let oldZone = zone
+        defer { if oldZone != zone { journal("zone") } }
         guard let portal,
               hypot(portal.position.x - position.x, portal.position.y - position.y) < 48 else { return }
         portalReturnPosition = position
@@ -942,6 +1188,7 @@ final class GameEngine: NSObject, ObservableObject {
         velocity = .zero
         steering = .zero
         boostRemaining = 0
+        log("portal.enter", "Вход в пещеру спрута")
         bossTimeRemaining = Self.bossDuration
         bossStrikeCooldown = 1.6
         bossStrike = nil
@@ -964,7 +1211,7 @@ final class GameEngine: NSObject, ObservableObject {
                     strike.phase = .impact
                     strike.timer = 0.55
                     if hypot(strike.position.x - position.x, strike.position.y - position.y) < 112 + Self.hullRadius {
-                        takeDamage()
+                        takeDamage(source: "tentacle")
                         velocity.dx += position.x < strike.position.x ? -125 : 125
                         velocity.dy += position.y < strike.position.y ? -95 : 95
                         boostRemaining = 0
@@ -989,6 +1236,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func completeBossCave() {
+        defer { journal("bossCompleted") }
         bossDefeated = true
         bossReward = 300
         bossStrike = nil
@@ -997,21 +1245,26 @@ final class GameEngine: NSObject, ObservableObject {
         accessibilityMoveRemaining = 0
         velocity = .zero
         steering = .zero
+        log("boss.reward", "Спрут побеждён: артефакт +300")
         invulnerability = 1
         eventCount += 1
         announce(A11yL10n.text("event.boss.complete", defaultValue: "Спрут отступил! Артефакт пещеры добавил 300 к добыче."), duration: 6)
         updateCamera(dt: 1, snap: true)
     }
 
-    private func takeDamage() {
+    private func takeDamage(source: String) {
         guard invulnerability <= 0, state == .playing else { return }
         invulnerability = 1.4
         damageCount += 1
         if hasShield {
             hasShield = false
+            journal("damage", ["absorbed": "shield"])
+            log("shield.hit", "Щит поглотил удар: \(source)", severity: "warning")
             announce(A11yL10n.text("event.shield.hit", defaultValue: "Щит поглотил удар"), duration: 2, urgent: true)
         } else {
             hull -= 1
+            journal("damage")
+            log("\(source).damage", source == "reef" ? "Обнял риф — корпус помят" : "Повреждение корпуса: \(source)", severity: "warning")
             announce(A11yL10n.format("event.hull.damage.format", defaultValue: "Корпус повреждён. %lld из 3", Int64(hull)),
                      duration: 2, urgent: true)
             if hull <= 0 { finish(success: false, reason: .hull) }
@@ -1025,6 +1278,7 @@ final class GameEngine: NSObject, ObservableObject {
             if pickup.kind == .battery && energy > 97 { continue }
             if pickup.kind == .shield && hasShield { continue }
             pickups[index].collected = true
+            defer { journal(pickup.kind == .blackBox ? "blackBox" : "pickup", ["kind": pickup.kind.rawValue, "id": String(pickup.id)]) }
             pickupCount += 1
             switch pickup.kind {
             case .crystal:
@@ -1042,9 +1296,11 @@ final class GameEngine: NSObject, ObservableObject {
                 announce(A11yL10n.text("event.sample", defaultValue: "Образец на борту. Плюс 75 к добыче"))
             case .blackBox:
                 hasBlackBox = true
+                journal("target", ["newTarget": "base"])
                 events.send(.objectiveChanged(true))
                 announce(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!"), duration: 6)
             }
+            log("pickup.\(pickup.kind.rawValue)", pickup.kind == .blackBox ? "Чёрный ящик — с собой" : "Подобрано: \(pickup.kind.rawValue), №\(pickup.id)")
         }
     }
 
@@ -1087,6 +1343,9 @@ final class GameEngine: NSObject, ObservableObject {
             announce(A11yL10n.text("event.hull.critical", defaultValue: "Внимание. Корпус: 1 из 3."), urgent: true)
         }
         let distanceToBase = hypot(position.x - level.base.x, position.y - level.base.y)
+        let tooFast = zone == .ocean && hasBlackBox && distanceToBase < 68 && speed >= 48
+        if tooFast && !dockingTooFast { events.send(.diagnostic(.warning, .control, "docking.denied", ["reason": "speed", "speed": String(Double(speed))])) }
+        dockingTooFast = tooFast
         if zone == .ocean, state == .playing, hasBlackBox, distanceToBase < 180, !announcedDockingHint {
             announcedDockingHint = true
             announce(A11yL10n.text("event.docking", defaultValue: "База рядом. Остановись в круге базы для швартовки."))
@@ -1094,10 +1353,23 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
+        log("notice", text, severity: urgent ? "warning" : "info")
+        logWatch(urgent ? "danger" : "event", text)
+        log(text, level: urgent ? .warning : .event,
+            phrase: urgent ? "Экипаж: осторожно!" : "Борт: " + String(text.prefix(48)))
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
         accessibilityAnnouncementRevision += 1
+    }
+
+    func logWatch(_ event: String, _ message: String, reason: String = "") {
+        let sobriety = CaptainLogger.Sobriety(rawValue: defaults.string(forKey: "podlodkaDive.captainSobriety") ?? "") ?? .sober
+        captainLogger.record(event, message: message, expedition: expeditionID, sobriety: sobriety,
+                             details: ["hull": String(hull), "energy": String(Int(energy)),
+                                       "depth": String(depth), "cargo": String(cargoValue),
+                                       "seconds": String(Int(runElapsed)), "zone": String(describing: zone),
+                                       "reason": reason])
     }
 
     private func directionAndDistance(to point: CGPoint) -> String {
@@ -1120,6 +1392,13 @@ final class GameEngine: NSObject, ObservableObject {
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         guard state == .playing else { return }
+        defer {
+            if success { journal("docking") }
+            journal(success ? "completed" : "gameOver")
+            navigate(to: "Result", reason: success ? "completed" : "gameOver")
+            endJournal(result: success ? "completed" : "gameOver", reason: success ? "docking" : String(describing: reason))
+        }
+        logWatch(success ? "success" : "failure", success ? "Экспедиция доставила груз" : "Экспедиция потеряна", reason: success ? "docked" : String(describing: reason))
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -1134,11 +1413,15 @@ final class GameEngine: NSObject, ObservableObject {
                 defaults.set(score, forKey: Self.bestKey)
             }
             state = .completed
+            closeJournal("Чёрный ящик доставлен. Добыча: \(score)")
+            log("Экспедиция завершена. Доставлено: \(score)")
         } else {
             if reason == .energy { events.send(.danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась"))) }
             failureReason = reason
             score = 0
             state = .gameOver
+            closeJournal(reason == .energy ? "Энергия закончилась. Добыча потеряна" : "Корпус разрушен. Добыча потеряна", severity: "error")
+            log(reason == .energy ? "Энергия закончилась" : "Корпус разрушен", level: .error)
         }
     }
 

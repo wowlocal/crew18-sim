@@ -57,6 +57,7 @@ final class VoiceOverAnnouncer: ObservableObject {
             return
         }
         switch event {
+        case .diagnostic, .runStarted, .runEnded: break
         case .danger(let text): enqueue(key: "danger", text: text, priority: .danger)
         case .speak(let text): enqueue(key: "speech:\(text)", text: text, priority: .event)
         case .energyLow:

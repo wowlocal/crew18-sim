@@ -18,6 +18,14 @@
 		A10000000000000000000008 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* Localizable.xcstrings */; };
 		A10000000000000000000009 /* AccessibilityAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* AccessibilityAuditTests.swift */; };
 		A1000000000000000000000A /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* XCTest.framework */; };
+		F10000000000000000000001 /* ExpeditionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001; };
+		F10000000000000000000002 /* ExpeditionJournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000002; };
+		F10000000000000000000003 /* ExpeditionJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000003; };
+		F10000000000000000000004 /* BureauView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000004; };
+		F10000000000000000000005 /* CaptainLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000005; };
+		F10000000000000000000006 /* BlackBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000006; };
+		F10000000000000000000007 /* BlackBoxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000007; };
+		F10000000000000000000008 /* ExpeditionLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000008; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,6 +59,14 @@
 		A2000000000000000000000A /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		A2000000000000000000000B /* AccessibilityAuditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityAuditTests.swift; sourceTree = "<group>"; };
 		A2000000000000000000000C /* PodlodkaDiveUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PodlodkaDiveUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F20000000000000000000001 /* ExpeditionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionLog.swift; sourceTree = "<group>"; };
+		F20000000000000000000002 /* ExpeditionJournalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionJournalView.swift; sourceTree = "<group>"; };
+		F20000000000000000000003 /* ExpeditionJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionJournal.swift; sourceTree = "<group>"; };
+		F20000000000000000000004 /* BureauView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BureauView.swift; sourceTree = "<group>"; };
+		F20000000000000000000005 /* CaptainLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptainLogger.swift; sourceTree = "<group>"; };
+		F20000000000000000000006 /* BlackBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBox.swift; sourceTree = "<group>"; };
+		F20000000000000000000007 /* BlackBoxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBoxView.swift; sourceTree = "<group>"; };
+		F20000000000000000000008 /* ExpeditionLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionLogTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -98,6 +114,13 @@
 				A20000000000000000000002 /* GameView.swift */,
 				D20000000000000000000001 /* VoiceOverAnnouncer.swift */,
 				A20000000000000000000003 /* GameEngine.swift */,
+				F20000000000000000000007 /* BlackBoxView.swift */,
+				F20000000000000000000006 /* BlackBox.swift */,
+				F20000000000000000000005 /* CaptainLogger.swift */,
+				F20000000000000000000004 /* BureauView.swift */,
+				F20000000000000000000003 /* ExpeditionJournal.swift */,
+				F20000000000000000000002 /* ExpeditionJournalView.swift */,
+				F20000000000000000000001 /* ExpeditionLog.swift */,
 				A20000000000000000000004 /* GameCanvas.swift */,
 				A20000000000000000000005 /* Assets.xcassets */,
 				A2000000000000000000000A /* Localizable.xcstrings */,
@@ -109,6 +132,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000006 /* GameEngineTests.swift */,
+				F20000000000000000000008 /* ExpeditionLogTests.swift */,
 			);
 			path = PodlodkaDiveTests;
 			sourceTree = "<group>";
@@ -274,6 +298,13 @@
 				A10000000000000000000002 /* GameView.swift in Sources */,
 				D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */,
 				A10000000000000000000003 /* GameEngine.swift in Sources */,
+				F10000000000000000000007 /* BlackBoxView.swift in Sources */,
+				F10000000000000000000006 /* BlackBox.swift in Sources */,
+				F10000000000000000000005 /* CaptainLogger.swift in Sources */,
+				F10000000000000000000004 /* BureauView.swift in Sources */,
+				F10000000000000000000003 /* ExpeditionJournal.swift in Sources */,
+				F10000000000000000000002 /* ExpeditionJournalView.swift in Sources */,
+				F10000000000000000000001 /* ExpeditionLog.swift in Sources */,
 				A10000000000000000000004 /* GameCanvas.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -283,6 +314,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000006 /* GameEngineTests.swift in Sources */,
+				F10000000000000000000008 /* ExpeditionLogTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -323,6 +355,8 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+                INFOPLIST_KEY_NSMicrophoneUsageDescription = "Микрофон нужен для голосовых заметок капитана.";
+                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Речь преобразуется в текст заметки на устройстве.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
@@ -351,6 +385,8 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+                INFOPLIST_KEY_NSMicrophoneUsageDescription = "Микрофон нужен для голосовых заметок капитана.";
+                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Речь преобразуется в текст заметки на устройстве.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
