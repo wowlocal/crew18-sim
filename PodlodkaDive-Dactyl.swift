@@ -1295,18 +1295,39 @@ actor BlackBox {
 
 // MARK: - BlackBoxView.swift
 
+// Serializes the audio callback with shutdown; the Speech request never crosses alone.
+private final class SpeechAudioSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private let request: SFSpeechAudioBufferRecognitionRequest
+    private var ended = false
+    init(request: SFSpeechAudioBufferRecognitionRequest) { self.request = request }
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !ended else { return }
+        request.append(buffer)
+    }
+    func finish() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !ended else { return }
+        ended = true
+        request.endAudio()
+    }
+}
+
 @MainActor protocol VoiceNoteTranscriber: AnyObject {
     func start(update: @escaping @MainActor (String) -> Void, failure: @escaping @MainActor (String) -> Void) async throws
     func stop()
 }
 @MainActor final class DeviceVoiceNoteTranscriber: VoiceNoteTranscriber {
     private let audio = AVAudioEngine()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var audioSink: SpeechAudioSink?
     private var task: SFSpeechRecognitionTask?
     private var installed = false
     func start(update: @escaping @MainActor (String) -> Void, failure: @escaping @MainActor (String) -> Void) async throws {
         let status = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+            Self.requestSpeechAuthorization(continuation: continuation)
         }
         let microphone = await AVAudioApplication.requestRecordPermission()
         guard status == .authorized, microphone else { throw NoteError.permission }
@@ -1316,22 +1337,32 @@ actor BlackBox {
         try session.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker]); try session.setActive(true)
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true; request.shouldReportPartialResults = true
-        self.request = request
+        let sink = SpeechAudioSink(request: request)
+        audioSink = sink
         let input = audio.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else { stop(); throw NoteError.unavailable }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in sink.append(buffer) }
         installed = true
-        task = recognizer.recognitionTask(with: request) { result, error in
+        task = recognizer.recognitionTask(with: request) { @Sendable result, error in
             if let error { Task { @MainActor in failure(error.localizedDescription) } }
             if let text = result?.bestTranscription.formattedString { Task { @MainActor in update(text) } }
         }
         do { audio.prepare(); try audio.start() } catch { stop(); throw error }
     }
+    static func requestSpeechAuthorization(
+        continuation: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>,
+        request: (@escaping @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void) -> Void = {
+            SFSpeechRecognizer.requestAuthorization($0)
+        }
+    ) {
+        request { @Sendable status in continuation.resume(returning: status) }
+    }
+
     func stop() {
         audio.stop()
         if installed { audio.inputNode.removeTap(onBus: 0); installed = false }
-        request?.endAudio(); task?.cancel(); task = nil; request = nil
+        audioSink?.finish(); task?.cancel(); task = nil; audioSink = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
     enum NoteError: LocalizedError {
