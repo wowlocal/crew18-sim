@@ -61,7 +61,11 @@ struct ReceiptPaper: View {
             Divider()
             Text("Обнял риф — корпус помят: \(receipt.reefs)")
             Text("Форсаж — батарейку списали: \(receipt.boosts) × 7 энергии")
-            Text(receipt.blackBoxes > 0 ? "Чёрный ящик — с собой" : "Чёрный ящик — не найден")
+            if let id = receipt.missionID, let mission = CampaignMission(rawValue: id), mission != .aster {
+                Text("Задание: \(mission.title)")
+            } else {
+                Text(receipt.blackBoxes > 0 ? "Чёрный ящик — с собой" : "Чёрный ящик — не найден")
+            }
             Divider()
             Text(receipt.outcome).bold()
             Text("Спасибо за погружение. Тревожность возврату не подлежит.")
@@ -117,7 +121,9 @@ private struct DiveCaseView: View {
                         Text(entry.kind).font(.body.monospaced())
                         Text(String(format: "Энергия %.1f · корпус %d/3 · груз %d", entry.boat.energy, entry.boat.hull, entry.boat.cargo))
                         Text(String(format: "Координаты %.0f, %.0f · скорость %.1f", entry.boat.x, entry.boat.y, entry.boat.speed))
-                        Text("\(entry.boat.zone) · \(entry.boat.state) · щит: \(entry.boat.shield ? "да" : "нет") · ящик: \(entry.boat.blackBox ? "да" : "нет")")
+                        Text("\(entry.boat.zone) · \(entry.boat.state) · щит: \(entry.boat.shield ? "да" : "нет")")
+                        if let phase = entry.boat.missionPhase { Text("Этап задания: \(phase)") }
+                        else { Text("Ящик: \(entry.boat.blackBox ? "да" : "нет")") }
                     }.accessibilityElement(children: .combine)
                 }
                 if let error { Text(error); Button("Повторить") { Task { await load() } } }

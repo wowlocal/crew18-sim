@@ -224,12 +224,12 @@ actor BlackBox {
                 let sessionID = runID
                 runID = id; active = true; ticks = 0
                 record(.state, "run.start", attrs: ["sessionID": sessionID.uuidString, "style": engine.selectedStyle.rawValue,
-                    "night": String(UserDefaults.standard.bool(forKey: "podlodkaDive.nightExpedition")), "best": String(engine.bestScore)])
+                    "night": String(UserDefaults.standard.bool(forKey: "podlodkaDive.nightExpedition")), "best": String(engine.bestScore)].merging(engine.missionMetadata) { _, new in new })
                 snapshot(engine.situationSummary, boundary: true)
             case .runEnded(let outcome):
                 guard active else { return }
                 snapshot(engine.situationSummary, boundary: true)
-                record(.state, "run.end", attrs: ["outcome": outcome, "score": String(engine.score), "best": String(engine.bestScore), "reason": String(describing: engine.failureReason)])
+                record(.state, "run.end", attrs: ["outcome": outcome, "score": String(engine.score), "best": String(engine.bestScore), "reason": outcome == ExpeditionOutcome.gameOver.rawValue ? String(describing: engine.failureReason) : outcome])
                 active = false; flush()
                 runID = UUID(); started = ProcessInfo.processInfo.systemUptime
             case .stateChanged(let state):
@@ -262,6 +262,6 @@ actor BlackBox {
     }
     func drain() async { await tail?.value; await logger.flush() }
     private func snapshot(_ s: SituationSummary, boundary: Bool = false) {
-        record(.state, boundary ? "snapshot.boundary" : "snapshot", attrs: ["zone": s.zone, "x": String(Double(s.position.x)), "y": String(Double(s.position.y)), "energy": String(Double(s.energy)), "hull": String(s.hull), "speed": String(s.speed)])
+        record(.state, boundary ? "snapshot.boundary" : "snapshot", attrs: ["zone": s.zone, "x": String(Double(s.position.x)), "y": String(Double(s.position.y)), "energy": String(Double(s.energy)), "hull": String(s.hull), "speed": String(s.speed), "target": s.targetName ?? "Чёрный ящик"].merging(engine?.missionMetadata ?? [:]) { _, new in new })
     }
 }
