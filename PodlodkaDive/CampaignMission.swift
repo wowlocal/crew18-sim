@@ -105,8 +105,8 @@ enum ExpeditionOutcome: String {
   case completed, returned, gameOver, abandoned
 }
 
-struct SearchSignal: Identifiable, Equatable {
-  enum Finding: String { case unknown, buoy, drone }
+struct SearchSignal: Codable, Identifiable, Equatable {
+  enum Finding: String, Codable { case unknown, buoy, drone }
   let id: Int
   let position: CGPoint
   var finding: Finding = .unknown
@@ -120,7 +120,7 @@ struct SearchSignal: Identifiable, Equatable {
   }
 }
 
-struct MissionRun {
+struct MissionRun: Codable {
   static let scanRadius: CGFloat = 220
   let mission: CampaignMission
   private let realSignalIndex: Int

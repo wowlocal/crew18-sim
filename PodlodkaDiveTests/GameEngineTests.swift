@@ -1,3 +1,5 @@
+import UserNotifications
+
 import XCTest
 import SwiftData
 import Combine
@@ -1398,5 +1400,219 @@ extension BlackBoxTests {
         XCTAssertEqual(entries.map(\.seq), [39, 40, 41, 42])
         let recovered = await logger.storageError
         XCTAssertNil(recovered)
+    }
+}
+
+@MainActor
+private final class MemoryReminders: ReminderClient {
+    var allowed = true
+    var requests: [String: UNNotificationRequest] = [:]
+    func authorize() async throws -> Bool { allowed }
+    func replace(_ requests: [UNNotificationRequest]) async throws {
+        self.requests = Dictionary(uniqueKeysWithValues: requests.map { ($0.identifier, $0) })
+    }
+    func cancel() { requests = [:] }
+}
+
+@MainActor
+final class ExpeditionRecoveryTests: XCTestCase {
+    private func fixture() -> (GameEngine, ExpeditionRecovery, MemoryReminders, URL) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let engine = GameEngine(defaults: defaults, journal: DiscardJournal(), randomValue: { 0 })
+        let client = MemoryReminders()
+        let recovery = ExpeditionRecovery(engine: engine, directory: directory, client: client,
+                                           now: { Date(timeIntervalSince1970: 1_773_000_000) })
+        engine.recovery = recovery
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return (engine, recovery, client, directory)
+    }
+    func testExactSnapshotAndPausedRestore() throws {
+        let (engine, recovery, _, _) = fixture()
+        engine.startGame(); engine.setSteering(CGVector(dx: 0.6, dy: 0.8)); engine.activateBoost()
+        for _ in 0..<120 { engine.step(deltaTime: 1.0 / 120) }
+        let before = engine.snapshot()
+        engine.returnToMenu()
+        recovery.open(ReturnRoute(id: before.id).url)
+        XCTAssertEqual(engine.state, .paused)
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let original = try JSONSerialization.jsonObject(with: encoder.encode(before)) as! NSDictionary
+        let restored = try JSONSerialization.jsonObject(with: encoder.encode(engine.snapshot())) as! NSDictionary
+        for key in original.allKeys where key as? String != "revealedPickups" { XCTAssertEqual(original[key] as? NSObject, restored[key] as? NSObject, "Snapshot field: \(key)") }
+        XCTAssertEqual(before.revealedPickups, engine.revealedPickups)
+        engine.togglePause()
+        for _ in 0..<60 { engine.step(deltaTime: 1.0 / 120) }
+        let position = engine.position
+        recovery.open(ReturnRoute(id: before.id).url)
+        XCTAssertEqual(engine.state, .playing)
+        XCTAssertEqual(engine.position, position)
+        XCTAssertEqual(recovery.history.filter { $0.kind == "restore" }.count, 1)
+    }
+    func testCampaignSnapshotRestoresMissionAndObjectiveProgress() throws {
+        // given: a saved third mission, then a different selected mission in the menu.
+        let (engine, _, _, _) = fixture()
+        engine.startGame()
+        var saved = engine.snapshot()
+        var mission = MissionRun(mission: .silentSignal, randomValue: 0.8)
+        mission.signals[0].finding = .buoy
+        mission.droneRecovered = true
+        mission.returningEarly = true
+        saved.missionRun = mission
+        saved.level = CampaignMission.silentSignal.level
+        let decoded = try JSONDecoder().decode(ExpeditionSnapshot.self, from: JSONEncoder().encode(saved))
+
+        // when
+        engine.restore(decoded)
+
+        // then: retaining only physics would silently restore Aster with no search progress.
+        XCTAssertEqual(engine.state, .paused)
+        XCTAssertEqual(engine.mission, .silentSignal)
+        XCTAssertEqual(engine.missionRun?.signals[0].finding, .buoy)
+        XCTAssertEqual(engine.missionRun?.droneRecovered, true)
+        XCTAssertEqual(engine.missionRun?.returningEarly, true)
+        XCTAssertEqual(engine.snapshot().missionRun?.mission, .silentSignal)
+    }
+
+    func testPausedReturnCourseSurvivesSave() throws {
+        // given: pause caches the physical state before the captain chooses a return course.
+        let (engine, recovery, _, _) = fixture()
+        engine.startGame()
+        engine.pause()
+
+        // when
+        engine.setReturnToBase(true)
+        engine.returnToMenu()
+        let saved = try recovery.load()
+        engine.restore(saved)
+
+        // then: the cached snapshot must not overwrite the new mission decision.
+        XCTAssertEqual(engine.missionRun?.returningEarly, true)
+    }
+
+    func testScheduleCancelRescheduleAndPushRoute() async throws {
+        let (engine, recovery, client, _) = fixture()
+        engine.startGame(); engine.pause()
+        await recovery.settle()
+        XCTAssertTrue(client.requests.isEmpty)
+        engine.returnToMenu(); await recovery.settle()
+        XCTAssertEqual(client.requests.count, 2)
+        let request = try XCTUnwrap(client.requests["expedition.return.7"])
+        let url = try XCTUnwrap(URL(string: request.content.userInfo["url"] as! String))
+        let eventID = UUID(uuidString: request.content.userInfo["eventID"] as! String)!
+        recovery.open(url, pushEventID: eventID); await recovery.settle()
+        XCTAssertEqual(engine.state, .paused); XCTAssertTrue(client.requests.isEmpty)
+        recovery.open(url, pushEventID: eventID)
+        XCTAssertEqual(recovery.history.filter { $0.kind == "pushOpened" }.count, 1)
+        engine.togglePause(); engine.returnToMenu(); await recovery.settle()
+        XCTAssertEqual(client.requests.count, 2)
+        recovery.deleteSave(); await recovery.settle()
+        XCTAssertTrue(client.requests.isEmpty)
+        recovery.open(url); XCTAssertNotNil(recovery.message); XCTAssertEqual(engine.state, .ready)
+    }
+    func testCalendarDaysAcrossDST() throws {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 7, hour: 14, minute: 30))!
+        let requests = ReminderPlan.requests(id: UUID(), eventID: UUID(), now: now, calendar: calendar)
+        for (index, day) in [8, 14].enumerated() {
+            let trigger = try XCTUnwrap(requests[index].trigger as? UNCalendarNotificationTrigger)
+            XCTAssertEqual(trigger.dateComponents.day, day)
+            XCTAssertEqual(trigger.dateComponents.hour, 14)
+            XCTAssertEqual(trigger.dateComponents.minute, 30)
+            XCTAssertFalse(trigger.repeats)
+        }
+    }
+    func testColdStartHistoryFiltersAndDeniedPermission() async throws {
+        let (engine, recovery, client, directory) = fixture()
+        client.allowed = false
+        engine.startGame(); engine.returnToMenu(); await recovery.settle()
+        XCTAssertTrue(client.requests.isEmpty)
+        let id = try XCTUnwrap(recovery.savedID)
+        let second = GameEngine(journal: DiscardJournal())
+        let restored = ExpeditionRecovery(engine: second, directory: directory, client: client)
+        second.recovery = restored
+        let inbox = ReturnInbox()
+        inbox.receive(ReturnRoute(id: id).url)
+        XCTAssertEqual(second.state, .ready)
+        inbox.connect { url, _ in restored.open(url) }
+        XCTAssertEqual(second.state, .paused)
+        let event = try XCTUnwrap(restored.events(.unread).first)
+        restored.markRead(event.id)
+        XCTAssertFalse(restored.events(.unread).contains { $0.id == event.id })
+        XCTAssertTrue(restored.events(.notifications).allSatisfy(\.isNotification))
+        let reloaded = ExpeditionRecovery(engine: second, directory: directory, client: client)
+        XCTAssertTrue(reloaded.history.contains { $0.id == event.id && $0.read })
+        restored.deleteSave()
+        XCTAssertFalse(restored.canOpen(event))
+        XCTAssertFalse(restored.history.isEmpty)
+    }
+    func testVersionCorruptionStaleAndConfirmation() throws {
+        let (engine, recovery, _, directory) = fixture()
+        engine.startGame(); engine.pause()
+        let save = try recovery.load()
+        let stale = ReturnRoute(id: UUID()).url
+        recovery.open(stale); XCTAssertEqual(engine.state, .paused); XCTAssertNotNil(recovery.message)
+        var other = save; other.id = UUID()
+        try JSONEncoder().encode(other).write(to: directory.appendingPathComponent("expedition.json"))
+        recovery.open(ReturnRoute(id: other.id).url)
+        XCTAssertNotNil(recovery.replacement); XCTAssertEqual(engine.expeditionId, save.id.uuidString)
+        recovery.open(ReturnRoute(id: other.id).url, confirmed: true)
+        XCTAssertEqual(engine.expeditionId, other.id.uuidString)
+        var incompatible = save; incompatible.version = 99
+        try JSONEncoder().encode(incompatible).write(to: directory.appendingPathComponent("expedition.json"))
+        XCTAssertThrowsError(try recovery.load())
+        try Data("broken".utf8).write(to: directory.appendingPathComponent("expedition.json"))
+        XCTAssertThrowsError(try recovery.load())
+        let reload = ExpeditionRecovery(engine: GameEngine(journal: DiscardJournal()), directory: directory, client: MemoryReminders())
+        XCTAssertNil(reload.savedID); XCTAssertNotNil(reload.message)
+    }
+}
+
+extension ExpeditionRecoveryTests {
+    func testTerminalRunDeletesSaveAndInvalidatesEvents() async throws {
+        let (engine, recovery, client, _) = fixture()
+        engine.startGame(); engine.pause()
+        let id = try XCTUnwrap(recovery.savedID)
+        var ending = try recovery.load()
+        ending.energy = 0.001
+        ending.position = CGPoint(x: 700, y: 300)
+        engine.restore(ending)
+        engine.togglePause()
+        engine.setSteering(CGVector(dx: 1, dy: 0))
+        engine.step(deltaTime: 0.1)
+        XCTAssertEqual(engine.state, .gameOver)
+        XCTAssertNil(recovery.savedID)
+        XCTAssertTrue(recovery.history.contains { $0.kind == "gameOver" })
+        XCTAssertTrue(recovery.history.allSatisfy { !recovery.canOpen($0) })
+        recovery.open(ReturnRoute(id: id).url)
+        XCTAssertEqual(engine.state, .ready)
+        await recovery.settle()
+        XCTAssertTrue(client.requests.isEmpty)
+    }
+    func testOutOfRangeNumbersAreRejectedBeforeRestore() throws {
+        let (engine, recovery, _, directory) = fixture()
+        engine.startGame(); engine.pause()
+        var snapshot = try recovery.load()
+        snapshot.position = CGPoint(x: 1e100, y: 1e100)
+        try JSONEncoder().encode(snapshot).write(to: directory.appendingPathComponent("expedition.json"))
+        XCTAssertThrowsError(try recovery.load())
+    }
+}
+
+
+extension ExpeditionRecoveryTests {
+    func testResumePreservesPartialPhysicsStep() {
+        let (reference, _, _, _) = fixture()
+        reference.startGame()
+        reference.setSteering(CGVector(dx: 1, dy: 0))
+        reference.step(deltaTime: 0.014)
+        let resumed = GameEngine(journal: DiscardJournal())
+        resumed.restore(reference.snapshot())
+        resumed.togglePause()
+        reference.step(deltaTime: 0.020)
+        resumed.step(deltaTime: 0.020)
+        XCTAssertEqual(reference.position, resumed.position)
+        XCTAssertEqual(reference.velocity, resumed.velocity)
+        XCTAssertEqual(reference.energy, resumed.energy)
+        XCTAssertEqual(reference.runElapsed, resumed.runElapsed)
     }
 }

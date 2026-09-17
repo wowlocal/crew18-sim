@@ -3,6 +3,9 @@ import UIKit
 import Combine
 
 struct GameView: View {
+    @StateObject private var recovery: ExpeditionRecovery
+    @State private var showingEvents = false
+    @State private var confirmNewGame = false
     @StateObject private var engine: GameEngine
     @StateObject private var recorder: BlackBoxRecorder
     @StateObject private var captain = CaptainNote()
@@ -32,6 +35,9 @@ struct GameView: View {
 
     init(engine: GameEngine = GameEngine()) {
         let arguments = ProcessInfo.processInfo.arguments
+        let recovery = ExpeditionRecovery(engine: engine)
+        engine.recovery = recovery
+        _recovery = StateObject(wrappedValue: recovery)
         _engine = StateObject(wrappedValue: engine)
         _recorder = StateObject(wrappedValue: BlackBoxRecorder(engine: engine))
         _showingMap = State(initialValue: arguments.contains("map"))
@@ -86,10 +92,30 @@ struct GameView: View {
                     engine.prepareAccessibilityAuditState(arguments[marker + 1])
                 }
 #endif
+                ReturnInbox.shared.connect { url, event in openReturnURL(url, eventID: event) }
                 if engine.state != .ready { engine.startLoop() }
             }
             .onDisappear { engine.stopLoop() }
             .onChange(of: proxy.size) { _, size in engine.resize(to: size) }
+        }
+        .onOpenURL { openReturnURL($0) }
+        .sheet(isPresented: $showingEvents, onDismiss: { focusedControl = "surfaceMenu" }) {
+            ReturnEventsView(recovery: recovery) { openReturnURL($0) }
+        }
+        .onChange(of: showingEvents) { _, visible in engine.navigate(to: visible ? "Events" : journalReturnScreen, reason: "events") }
+        .alert("Возвращение в экспедицию", isPresented: Binding(get: { recovery.message != nil }, set: { if !$0 { recovery.message = nil } })) {
+            Button("Понятно") { recovery.message = nil }
+        } message: { Text(recovery.message ?? "") }
+        .confirmationDialog("Заменить активную экспедицию сохранённой?", isPresented: Binding(get: { recovery.replacement != nil }, set: { if !$0 { recovery.replacement = nil } })) {
+            Button("Открыть сохранение", role: .destructive) {
+                if let route = recovery.replacement { recovery.open(route.url, confirmed: true) }
+                recovery.replacement = nil
+            }
+            Button("Отмена", role: .cancel) { recovery.replacement = nil }
+        }
+        .confirmationDialog("Начать новую экспедицию? Сохранение будет удалено.", isPresented: $confirmNewGame) {
+            Button("Начать новую", role: .destructive) { engine.startGame() }
+            Button("Отмена", role: .cancel) { }
         }
         .ignoresSafeArea()
         .statusBarHidden()
@@ -102,6 +128,7 @@ struct GameView: View {
             if phase != .active {
                 captain.finish(recorder: recorder)
                 engine.pause()
+                if phase == .background { recovery.save(exiting: true) }
                 engine.captainLogger.flush()
                 let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Expedition flush")
                 Task {
@@ -141,12 +168,12 @@ struct GameView: View {
         .sheet(isPresented: $showingSettings) { settingsPanel }
         .sheet(isPresented: $showingHelp) { helpPanel }
         .fullScreenCover(isPresented: $showingCampaign) { CampaignView(engine: engine) }
-        .alert("Прервать рейс?", isPresented: $confirmingAbandon) {
-            Button("Прервать рейс", role: .destructive) { showingMap = false; engine.returnToMenu() }
+        .alert("Сохранить и выйти?", isPresented: $confirmingAbandon) {
+            Button("Сохранить и выйти") { showingMap = false; engine.returnToMenu() }
                 .accessibilityIdentifier("confirmAbandon")
             Button("Остаться", role: .cancel) {}.accessibilityIdentifier("cancelAbandon")
         } message: {
-            Text("Недоставленная добыча пропадёт. Кристаллы сохранятся.")
+            Text("Экспедиция сохранится. Её можно будет продолжить с этого места.")
         }
         .fullScreenCover(isPresented: $showingArchives) { archiveLibrary }
         .sheet(isPresented: $showingGarage) { garagePanel }
@@ -166,6 +193,23 @@ struct GameView: View {
             if state != .playing { captain.finish(recorder: recorder) }
         }
 
+    }
+
+    private func openReturnURL(_ url: URL, eventID: UUID? = nil) {
+        showingMap = false
+        showingCampaign = false
+        showingSettings = false
+        showingHelp = false
+        showingEvents = false
+        showingArchives = false
+        showingGarage = false
+        showingJournal = false
+        showingReplay = false
+        showingBureau = false
+        showingCaptainJournal = false
+        showingBlackBox = false
+        showingCrewJournal = false
+        recovery.open(url, pushEventID: eventID)
     }
 
     private var journalReturnScreen: String {
@@ -266,6 +310,8 @@ struct GameView: View {
                     .font(.system(.headline, design: .monospaced)).foregroundStyle(.white)
                 Spacer()
                 Menu {
+                    Button("События", systemImage: "clock.arrow.circlepath") { showingEvents = true }
+                        .accessibilityIdentifier("openEvents")
                     Button("Гараж", systemImage: "wrench.and.screwdriver") {
                         garageMessage = ""
                         showingGarage = true
@@ -282,6 +328,7 @@ struct GameView: View {
                 }
                 .foregroundStyle(.white).accessibilityLabel("Меню")
                 .accessibilityIdentifier("surfaceMenu")
+                 .accessibilityFocused($focusedControl, equals: "surfaceMenu")
             }
             Text("Курс на глубину")
                 .font(.system(.largeTitle, design: .rounded).bold())
@@ -307,9 +354,16 @@ struct GameView: View {
                 .buttonStyle(.plain).disabled(!engine.isCampaign)
                 .accessibilityIdentifier("openCampaign")
                 .accessibilityHint("Выбрать другую экспедицию и прочитать задание")
+                if let id = recovery.savedID {
+                    Button { openReturnURL(ReturnRoute(id: id).url) } label: {
+                        HStack { Spacer(); Text("Продолжить"); Spacer(); Image(systemName: "play.fill") }
+                    }
+                        .buttonStyle(DiveButtonStyle()).accessibilityIdentifier("continueExpedition")
+                        .accessibilityHint("Восстанавливает незавершённую экспедицию на паузе")
+                }
                 Button {
                     showingMap = false
-                    engine.startGame()
+                    if recovery.savedID != nil { confirmNewGame = true } else { engine.startGame() }
                 } label: {
                     HStack { Spacer(); Text("Начать"); Spacer(); Image(systemName: "arrow.right") }
                 }
@@ -755,11 +809,11 @@ struct GameView: View {
                     if paused { confirmingAbandon = true }
                     else { showingMap = false; engine.returnToMenu(); showingCampaign = engine.isCampaign }
                 } label: {
-                    Text(paused ? "Прервать рейс" : "Выбор экспедиции").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                    Text(paused ? "Сохранить и выйти" : "Выбор экспедиции").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 }
                     .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
                     .accessibilityIdentifier("returnToMenu")
-                    .accessibilityLabel(paused ? "Прервать рейс" : "Выбор экспедиции")
+                    .accessibilityLabel(paused ? "Сохранить и выйти" : "Выбор экспедиции")
             }
             if !paused, let diveID = engine.diveID {
                 LatestReceiptView(journal: .shared, diveID: diveID)

@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct OceanLevel {
+struct OceanLevel: Codable {
   let size: CGSize
   let spawn: CGPoint
   let base: CGPoint
