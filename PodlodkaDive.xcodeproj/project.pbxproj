@@ -7,8 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		D10000000000000000000003 = {isa = PBXBuildFile; fileRef = D20000000000000000000003; };
-		D10000000000000000000002 = {isa = PBXBuildFile; fileRef = D20000000000000000000002; };
 		D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
 		A10000000000000000000001 /* PodlodkaDiveApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* PodlodkaDiveApp.swift */; };
 		A10000000000000000000002 /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* GameView.swift */; };
@@ -20,9 +18,14 @@
 		A10000000000000000000008 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* Localizable.xcstrings */; };
 		A10000000000000000000009 /* AccessibilityAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* AccessibilityAuditTests.swift */; };
 		A1000000000000000000000A /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* XCTest.framework */; };
-		E10000000000000000000001 = {isa = PBXBuildFile; fileRef = E20000000000000000000001; };
-		E10000000000000000000002 = {isa = PBXBuildFile; fileRef = E20000000000000000000002; };
-E10000000000000000000003 = {isa = PBXBuildFile; fileRef = E20000000000000000000003; };
+		F10000000000000000000001 /* ExpeditionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001; };
+		F10000000000000000000002 /* ExpeditionJournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000002; };
+		F10000000000000000000003 /* ExpeditionJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000003; };
+		F10000000000000000000004 /* BureauView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000004; };
+		F10000000000000000000005 /* CaptainLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000005; };
+		F10000000000000000000006 /* BlackBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000006; };
+		F10000000000000000000007 /* BlackBoxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000007; };
+		F10000000000000000000008 /* ExpeditionLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000008; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,8 +46,6 @@ E10000000000000000000003 = {isa = PBXBuildFile; fileRef = E200000000000000000000
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		D20000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBoxView.swift; sourceTree = "<group>"; };
-		D20000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBox.swift; sourceTree = "<group>"; };
 		D20000000000000000000001 /* VoiceOverAnnouncer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceOverAnnouncer.swift; sourceTree = "<group>"; };
 		A20000000000000000000001 /* PodlodkaDiveApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodlodkaDiveApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* GameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameView.swift; sourceTree = "<group>"; };
@@ -58,9 +59,14 @@ E10000000000000000000003 = {isa = PBXBuildFile; fileRef = E200000000000000000000
 		A2000000000000000000000A /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		A2000000000000000000000B /* AccessibilityAuditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityAuditTests.swift; sourceTree = "<group>"; };
 		A2000000000000000000000C /* PodlodkaDiveUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PodlodkaDiveUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		E20000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionLog.swift; sourceTree = "<group>"; };
-		E20000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionJournalView.swift; sourceTree = "<group>"; };
-E20000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionLogTests.swift; sourceTree = "<group>"; };
+		F20000000000000000000001 /* ExpeditionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionLog.swift; sourceTree = "<group>"; };
+		F20000000000000000000002 /* ExpeditionJournalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionJournalView.swift; sourceTree = "<group>"; };
+		F20000000000000000000003 /* ExpeditionJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionJournal.swift; sourceTree = "<group>"; };
+		F20000000000000000000004 /* BureauView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BureauView.swift; sourceTree = "<group>"; };
+		F20000000000000000000005 /* CaptainLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptainLogger.swift; sourceTree = "<group>"; };
+		F20000000000000000000006 /* BlackBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBox.swift; sourceTree = "<group>"; };
+		F20000000000000000000007 /* BlackBoxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackBoxView.swift; sourceTree = "<group>"; };
+		F20000000000000000000008 /* ExpeditionLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionLogTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -105,15 +111,16 @@ E20000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourceco
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000001 /* PodlodkaDiveApp.swift */,
-                E20000000000000000000002,
-                E20000000000000000000001,
 				A20000000000000000000002 /* GameView.swift */,
-				D20000000000000000000002 /* ExpeditionJournal.swift */,
-				D20000000000000000000003 /* BureauView.swift */,
 				D20000000000000000000001 /* VoiceOverAnnouncer.swift */,
-                D20000000000000000000003,
-                D20000000000000000000002,
 				A20000000000000000000003 /* GameEngine.swift */,
+				F20000000000000000000007 /* BlackBoxView.swift */,
+				F20000000000000000000006 /* BlackBox.swift */,
+				F20000000000000000000005 /* CaptainLogger.swift */,
+				F20000000000000000000004 /* BureauView.swift */,
+				F20000000000000000000003 /* ExpeditionJournal.swift */,
+				F20000000000000000000002 /* ExpeditionJournalView.swift */,
+				F20000000000000000000001 /* ExpeditionLog.swift */,
 				A20000000000000000000004 /* GameCanvas.swift */,
 				A20000000000000000000005 /* Assets.xcassets */,
 				A2000000000000000000000A /* Localizable.xcstrings */,
@@ -125,7 +132,7 @@ E20000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourceco
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000006 /* GameEngineTests.swift */,
-E20000000000000000000003,
+				F20000000000000000000008 /* ExpeditionLogTests.swift */,
 			);
 			path = PodlodkaDiveTests;
 			sourceTree = "<group>";
@@ -288,15 +295,16 @@ E20000000000000000000003,
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* PodlodkaDiveApp.swift in Sources */,
-                E10000000000000000000002,
-                E10000000000000000000001,
 				A10000000000000000000002 /* GameView.swift in Sources */,
-				D10000000000000000000002 /* ExpeditionJournal.swift in Sources */,
-				D10000000000000000000003 /* BureauView.swift in Sources */,
 				D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */,
-                D10000000000000000000003,
-                D10000000000000000000002,
 				A10000000000000000000003 /* GameEngine.swift in Sources */,
+				F10000000000000000000007 /* BlackBoxView.swift in Sources */,
+				F10000000000000000000006 /* BlackBox.swift in Sources */,
+				F10000000000000000000005 /* CaptainLogger.swift in Sources */,
+				F10000000000000000000004 /* BureauView.swift in Sources */,
+				F10000000000000000000003 /* ExpeditionJournal.swift in Sources */,
+				F10000000000000000000002 /* ExpeditionJournalView.swift in Sources */,
+				F10000000000000000000001 /* ExpeditionLog.swift in Sources */,
 				A10000000000000000000004 /* GameCanvas.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -306,7 +314,7 @@ E20000000000000000000003,
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000006 /* GameEngineTests.swift in Sources */,
-E10000000000000000000003,
+				F10000000000000000000008 /* ExpeditionLogTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -343,12 +351,12 @@ E10000000000000000000003,
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record captain notes as text.";
-                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Transcribe captain notes on this device.";
-                INFOPLIST_KEY_CFBundleDisplayName = "Podlodka Dive";
+				INFOPLIST_KEY_CFBundleDisplayName = "Podlodka Dive";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+                INFOPLIST_KEY_NSMicrophoneUsageDescription = "Микрофон нужен для голосовых заметок капитана.";
+                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Речь преобразуется в текст заметки на устройстве.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
@@ -373,12 +381,12 @@ E10000000000000000000003,
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record captain notes as text.";
-                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Transcribe captain notes on this device.";
-                INFOPLIST_KEY_CFBundleDisplayName = "Podlodka Dive";
+				INFOPLIST_KEY_CFBundleDisplayName = "Podlodka Dive";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+                INFOPLIST_KEY_NSMicrophoneUsageDescription = "Микрофон нужен для голосовых заметок капитана.";
+                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Речь преобразуется в текст заметки на устройстве.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";

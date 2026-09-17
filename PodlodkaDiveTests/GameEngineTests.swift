@@ -67,35 +67,38 @@ final class GameEngineTests: XCTestCase {
         engine.activateBoost()
         engine.activateSonar()
         XCTAssertEqual(engine.journalLeak?.phrase, "Капитан: погружаемся!")
-        XCTAssertTrue(engine.journal.entries.contains { $0.message == "Форсаж включён" })
+        XCTAssertTrue(engine.crewJournal.entries.contains { $0.message == "Форсаж включён" })
         engine.pause()
         let time = engine.runElapsed
         advance(engine, 10)
         XCTAssertEqual(engine.runElapsed, time)
         XCTAssertNotNil(engine.journalLeak)
         engine.togglePause()
-        advance(engine, 4)
+        advance(engine, 4.6)
         XCTAssertNil(engine.journalLeak)
-        advance(engine, 12)
+        XCTAssertTrue(engine.canBoost)
+        engine.activateBoost()
+        XCTAssertNil(engine.journalLeak, "A new bubble must wait eight seconds, even after the old one expired")
+        advance(engine, 11.4)
         XCTAssertTrue(engine.journalLeak?.phrase.hasPrefix("Штурман:") == true)
-        XCTAssertTrue(engine.journal.entries.contains { $0.level == .state && $0.message == "Плановый доклад экипажа" })
+        XCTAssertTrue(engine.crewJournal.entries.contains { $0.level == .state && $0.message == "Плановый доклад экипажа" })
     }
 
     func testJournalRetainsRunsAndRecordsFailureSnapshot() {
         let engine = makeEngine()
         engine.prepareAccessibilityAuditState("gameOver")
-        let failure = engine.journal.entries.last!
+        let failure = engine.crewJournal.entries.last!
         XCTAssertEqual(failure.level, .error)
         XCTAssertEqual(failure.message, "Энергия закончилась")
         XCTAssertTrue(failure.snapshot.contains("gameOver"))
         engine.startGame()
         XCTAssertEqual(engine.expeditionNumber, 3)
-        XCTAssertTrue(engine.journal.entries.contains { $0.id == failure.id })
+        XCTAssertTrue(engine.crewJournal.entries.contains { $0.id == failure.id })
         XCTAssertEqual(engine.journalLeak?.startedAt, 0)
     }
 
     func testJournalEvictsOldestRecordsAtCapacity() {
-        let logger = ExpeditionLogger()
+        let logger = CrewEventLog()
         for index in 0..<510 {
             logger.record(expedition: 1, seconds: Double(index), level: .event,
                           message: "Event \(index)", snapshot: "State")
@@ -719,7 +722,7 @@ final class GameEngineTests: XCTestCase {
         for _ in 0..<2 {
             engine.setSteering(CompassCourse.e.vector)
             advance(engine, 95)
-            XCTAssertEqual(Array(events.suffix(3)), [.energyLow, .danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась")), .stateChanged(.gameOver)])
+            XCTAssertEqual(Array(events.suffix(4)), [.energyLow, .danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась")), .stateChanged(.gameOver), .runEnded("gameOver")])
             engine.startGame()
         }
         XCTAssertEqual(events.filter { $0 == .energyLow }.count, 2)
@@ -774,7 +777,7 @@ final class GameEngineTests: XCTestCase {
         defer { token.cancel() }
         advance(engine, 1)
         XCTAssertEqual(events, [.objectiveChanged(true), .speak(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!")),
-                                .success(600), .record(600), .stateChanged(.completed)])
+                                .success(600), .record(600), .stateChanged(.completed), .runEnded("completed")])
     }
 
     func testHiddenCrystalStaysHiddenInAllNavigationUntilRevealed() {
@@ -918,7 +921,7 @@ final class GameEngineTests: XCTestCase {
     }
     func testVolumeBatchPaginationAndConcurrentOrder() async throws {
         let store = try store(), id = UUID()
-        let logger = BlackBox(store: store)
+        let logger = BlackBox(store: store, sleep: { throw CancellationError() })
         await logger.recover()
         await logger.log(.info, .state, "run.start", runID: id, t: 0)
         for i in 1..<63 { await logger.log(.info, .event, "event", runID: id, t: Double(i)) }
@@ -942,14 +945,15 @@ final class GameEngineTests: XCTestCase {
     }
     func testRecoveryIsIdempotentAndRetentionKeepsTenRuns() async throws {
         let store = try store()
+        let ids = (0..<12).map { _ in UUID() }
         for i in 0..<12 {
-            try await store.write([BlackBoxEntry(runID: UUID(), seq: i + 1, t: 0, wallTime: Date(timeIntervalSince1970: Double(i)), level: .info, category: .state, message: "run.start", attrs: [:])])
+            try await store.write([BlackBoxEntry(runID: ids[i], seq: i + 1, t: 0, wallTime: Date(timeIntervalSince1970: Double(i)), level: .info, category: .state, message: "run.start", attrs: [:])])
         }
         _ = try await store.recoverAndPrune()
         _ = try await store.recoverAndPrune()
         let reader = BlackBoxReader(store: store)
         let runs = try await reader.runs()
-        XCTAssertEqual(runs.count, 10)
+        XCTAssertEqual(runs, Array(ids.suffix(10).reversed()))
         let entries = try await reader.all()
         XCTAssertEqual(entries.filter { $0.attrs["outcome"] == "interrupted" }.count, 10)
     }
@@ -1025,13 +1029,21 @@ extension BlackBoxTests {
         let date = Date(timeIntervalSince1970: 123)
         let logger = BlackBox(store: store, now: { date }, sleep: { await gate.sleep() })
         await logger.log(.info, .state, "run.start", runID: id, t: 0)
-        while !(await gate.ready()) { await Task.yield() }
+        let timerStarted = expectation(description: "Timer schedules a flush")
+        let observer = Task {
+            while !Task.isCancelled {
+                if await gate.ready() { timerStarted.fulfill(); return }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        await fulfillment(of: [timerStarted], timeout: 2)
+        observer.cancel()
         await gate.tick()
         var entries: [BlackBoxEntry] = []
-        for _ in 0..<1000 {
+        for _ in 0..<200 {
             entries = try await BlackBoxReader(store: store).all()
             if !entries.isEmpty { break }
-            await Task.yield()
+            try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertEqual(entries.count, 1)
         XCTAssertEqual(entries.first?.wallTime, date)
@@ -1121,7 +1133,9 @@ final class ExpeditionJournalTests: XCTestCase {
             XCTFail("Storage failure must be visible")
         } catch { XCTAssertFalse(error.localizedDescription.isEmpty) }
         try FileManager.default.removeItem(at: parent)
-        journal.record(event) // same event ID remains idempotent after retry
+        let restored = try await journal.entries(diveID: event.diveID)
+        XCTAssertEqual(restored.map(\.id), [event.id], "Recovery must not require resubmission")
+        journal.record(event)
         let receipts = try await journal.receipts()
         XCTAssertEqual(receipts.count, 1)
         let entries = try await journal.entries(diveID: event.diveID)
@@ -1185,6 +1199,8 @@ final class CaptainLoggerTests: XCTestCase {
         XCTAssertTrue(result.entries[0].message.contains("нелегка служба на подлодке"))
         XCTAssertEqual(result.entries[0].details, ["hull": "2"])
         XCTAssertEqual(result.entries[1].sobriety, .tipsy)
+        XCTAssertTrue(result.entries[1].message.hasPrefix("Так, записываю…"))
+        XCTAssertEqual(result.entries[1].details, ["hull": "2"])
         XCTAssertEqual(result.entries[2].details["depth"], "150")
         let reopened = await CaptainLogger(url: url).read()
         XCTAssertNil(reopened.error)
@@ -1240,5 +1256,159 @@ final class CaptainLoggerTests: XCTestCase {
         XCTAssertTrue(result.entries.contains { $0.event == "rejected.boost" })
         XCTAssertTrue(result.entries.contains { $0.event == "state" && $0.message.contains("paused") })
         XCTAssertEqual(Set(result.entries.map(\.expedition)).count, 2)
+    }
+}
+
+@MainActor
+final class DayTwoIntegrationTests: XCTestCase {
+    func testRestartSeparatesArchivesAndPauseUsesSimulationTime() async throws {
+        // given: all persistent views observe the same game, with isolated stores.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let receipt = ExpeditionJournal(url: root.appendingPathComponent("receipts.sqlite"))
+        let captain = CaptainLogger(url: root.appendingPathComponent("captain.json"))
+        let telemetryPath = root.appendingPathComponent("events.sqlite").path
+        let telemetry = ExpeditionLogger(path: telemetryPath)
+        let store = BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
+        let logger = BlackBox(store: store)
+        let engine = GameEngine(telemetryLogger: telemetry, journal: receipt, captainLogger: captain,
+                                randomValue: { 1 })
+        let recorder = BlackBoxRecorder(engine: engine, logger: logger)
+
+        // when: restart directly from playing, then leave the second run twice.
+        engine.startGame()
+        let first = try XCTUnwrap(engine.diveID)
+        engine.activateBoost()
+        for _ in 0..<20 { engine.step(deltaTime: 0.1) }
+        engine.pauseForScreen("Map")
+        let pausedTime = recorder.timestamp().1
+        for _ in 0..<20 { engine.step(deltaTime: 0.1) }
+        XCTAssertEqual(recorder.timestamp().1, pausedTime)
+        engine.navigate(to: "Pause", reason: "closeMap")
+        engine.navigate(to: "Journal", reason: "openJournal")
+        engine.navigate(to: "Pause", reason: "closeJournal")
+        engine.togglePause()
+        engine.startGame()
+        let second = try XCTUnwrap(engine.diveID)
+        engine.activateSonar()
+        engine.returnToMenu()
+        engine.returnToMenu()
+        await engine.flushJournal()
+        await recorder.drain()
+
+        // then: immutable run identity and exactly one boundary per run in each event store.
+        XCTAssertNotEqual(first, second)
+        let blackBox = try await BlackBoxReader(store: store).all()
+        for id in [first, second] {
+            let events = blackBox.filter { $0.runID == id }
+            XCTAssertEqual(events.filter { $0.message == "run.start" }.count, 1)
+            XCTAssertEqual(events.filter { $0.message == "run.end" }.count, 1)
+            XCTAssertEqual(events.first?.t, 0)
+            let receiptEvents = try await receipt.entries(diveID: id)
+            XCTAssertEqual(receiptEvents.filter { $0.kind == "start" }.count, 1)
+            XCTAssertEqual(receiptEvents.filter { $0.kind == "finish" }.count, 1)
+            let telemetryEvents = try await LogReader(path: telemetryPath).events(expeditionId: id.uuidString)
+            XCTAssertEqual(telemetryEvents.filter { $0.type == "start" }.count, 1)
+            XCTAssertEqual(telemetryEvents.filter { $0.type == "end" }.count, 1)
+            if id == first {
+                XCTAssertTrue(telemetryEvents.contains { $0.type == "boost" })
+                XCTAssertFalse(telemetryEvents.contains { $0.type == "sonar" })
+            } else {
+                XCTAssertTrue(telemetryEvents.contains { $0.type == "sonar" })
+                XCTAssertFalse(telemetryEvents.contains { $0.type == "boost" })
+            }
+        }
+        let watched = await captain.read()
+        XCTAssertEqual(Set(watched.entries.map(\.expedition)), [first, second])
+        let transitions = try await LogReader(path: telemetryPath).transitions(expeditionId: first.uuidString)
+        XCTAssertTrue(transitions.contains { $0.from == "Map" && $0.to == "Pause" })
+        XCTAssertTrue(transitions.contains { $0.from == "Pause" && $0.to == "Journal" })
+        XCTAssertTrue(transitions.contains { $0.from == "Journal" && $0.to == "Pause" })
+    }
+
+    func testDiagnosticPersistsWithoutSpeakingAndOldVoiceCallbacksCannotOverwriteNewNote() async throws {
+        // given
+        final class Transcriber: VoiceNoteTranscriber {
+            var updates: [@MainActor (String) -> Void] = []
+            var failures: [@MainActor (String) -> Void] = []
+            func start(update: @escaping @MainActor (String) -> Void,
+                       failure: @escaping @MainActor (String) -> Void) async throws { updates.append(update); failures.append(failure) }
+            func stop() {}
+        }
+        let store = BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
+        let engine = GameEngine(randomValue: { 1 })
+        let recorder = BlackBoxRecorder(engine: engine, logger: BlackBox(store: store))
+        engine.startGame()
+        var spoken: [String] = []
+        let announcer = VoiceOverAnnouncer(engine: engine, voiceOverRunning: { true },
+                                           post: { spoken.append($0.string) })
+        let transcriber = Transcriber()
+        let note = CaptainNote(transcriber: transcriber)
+
+        // when: callbacks from a cancelled recognition session arrive during the next session.
+        engine.events.send(.diagnostic(.warning, .system, "test.diagnostic", [:]))
+        await note.toggle(recorder: recorder)
+        transcriber.updates[0]("Первая заметка")
+        note.finish(recorder: recorder)
+        await note.toggle(recorder: recorder)
+        transcriber.updates[1]("Вторая заметка")
+        transcriber.updates[0]("Запоздалый результат")
+        transcriber.failures[0]("Запоздалая ошибка")
+        XCTAssertTrue(note.recording)
+        XCTAssertNil(note.error)
+        note.finish(recorder: recorder)
+        await recorder.drain()
+
+        // then
+        XCTAssertTrue(spoken.isEmpty)
+        let entries = try await BlackBoxReader(store: store).all()
+        XCTAssertEqual(entries.filter { $0.message == "test.diagnostic" }.count, 1)
+        XCTAssertEqual(entries.filter { $0.category == .captain }.map(\.message), ["Первая заметка", "Вторая заметка"])
+        withExtendedLifetime(announcer) {}
+    }
+}
+
+extension BlackBoxTests {
+    func testUnavailableStoreRetriesAndRebasesBufferedEventsAfterPersistedSequence() async throws {
+        // given: a previous launch already used sequence 40; this launch initially cannot open the store.
+        final class Availability: @unchecked Sendable {
+            private let lock = NSLock()
+            private var ready = false
+            func allow() { lock.withLock { ready = true } }
+            func check() throws {
+                try lock.withLock {
+                    if !ready { throw CocoaError(.fileReadNoPermission) }
+                }
+            }
+        }
+        let store = try store(), id = UUID()
+        let start = BlackBoxEntry(runID: id, seq: 39, t: 0, wallTime: Date(), level: .info,
+                                 category: .state, message: "run.start", attrs: [:])
+        let end = BlackBoxEntry(runID: id, seq: 40, t: 0, wallTime: Date(), level: .info,
+                               category: .state, message: "run.end", attrs: [:])
+        try await store.write([start, end])
+        let availability = Availability()
+        let logger = BlackBox(sleep: { throw CancellationError() }, storeFactory: {
+            try availability.check()
+            return store
+        })
+
+        // when: retry without resubmitting the event that was buffered while opening failed.
+        await logger.log(.info, .event, "buffered", runID: id, t: 1)
+        let failure = await logger.storageError
+        XCTAssertNotNil(failure)
+        availability.allow()
+        await logger.flush()
+        await logger.log(.info, .event, "new", runID: id, t: 2)
+        await logger.flush()
+
+        // then: no silent success, lost event, or duplicate sequence at the read cursor.
+        let entries = try await BlackBoxReader(store: store).all(runID: id)
+        XCTAssertEqual(entries.map(\.message), ["run.start", "run.end", "buffered", "new"])
+        XCTAssertEqual(entries.map(\.seq), [39, 40, 41, 42])
+        let recovered = await logger.storageError
+        XCTAssertNil(recovered)
     }
 }

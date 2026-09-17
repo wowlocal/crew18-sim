@@ -7,6 +7,7 @@ struct GameView: View {
     @StateObject private var recorder: BlackBoxRecorder
     @StateObject private var captain = CaptainNote()
     @State private var showingBlackBox = false
+    @State private var showingArchives = false
     @StateObject private var announcer: VoiceOverAnnouncer
     @AccessibilityFocusState private var focusedControl: String?
     @Environment(\.scenePhase) private var scenePhase
@@ -15,6 +16,7 @@ struct GameView: View {
     @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
     @State private var showingMap = false
     @State private var showingCrewJournal = false
+    @State private var crewVisibleLimit = 50
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
     @State private var showingGarage = false
     @State private var showingJournal = false
@@ -129,9 +131,8 @@ struct GameView: View {
         .onChange(of: showingGarage) { _, visible in engine.navigate(to: visible ? "Garage" : "Welcome", reason: visible ? "openGarage" : "closeGarage") }
         .onChange(of: showingJournal) { _, visible in engine.navigate(to: visible ? "Journal" : journalReturnScreen, reason: visible ? "openJournal" : "closeJournal") }
         .onChange(of: showingReplay) { _, visible in engine.navigate(to: visible ? "Replay" : journalReturnScreen, reason: visible ? "openReplay" : "closeReplay") }
-        .sheet(isPresented: $showingCrewJournal) { journalPanel }
+        .fullScreenCover(isPresented: $showingArchives) { archiveLibrary }
         .sheet(isPresented: $showingGarage) { garagePanel }
-        .sheet(isPresented: $showingJournal) { ExpeditionJournalView() }
         .sheet(isPresented: $showingReplay) {
             if let id = engine.expeditionId {
                 NavigationStack {
@@ -140,24 +141,10 @@ struct GameView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingBlackBox) { BlackBoxJournal() }
         .onChange(of: showingMap) { _, value in recorder.flow(value ? "map" : String(describing: engine.state)) }
         .onChange(of: showingGarage) { _, value in recorder.flow(value ? "garage" : "ready") }
         .onChange(of: showingBlackBox) { _, value in recorder.flow(value ? "journal" : String(describing: engine.state)) }
         .onChange(of: engine.state) { _, state in if state != .playing { captain.finish(recorder: recorder) } }
-        .overlay(alignment: .bottom) {
-            if engine.state == .playing {
-                VStack {
-                    if captain.recording { Text(captain.text).font(.caption).lineLimit(3) }
-                    if let error = captain.error { Text(error).font(.caption) }
-                    Button { Task { await captain.toggle(recorder: recorder) } } label: {
-                        Label(captain.recording ? "journal.voice.stop" : "journal.voice.start", systemImage: captain.recording ? "stop.circle" : "mic")
-                    }.disabled(captain.busy).buttonStyle(.bordered).controlSize(.large).tint(.white).background(.black, in: Capsule()).accessibilityIdentifier("captainNote")
-                }.padding(.bottom, 8)
-            }
-        }
-        .sheet(isPresented: $showingBureau) { BureauView(journal: .shared) }
-        .sheet(isPresented: $showingCaptainJournal) { CaptainJournalView(logger: engine.captainLogger) }
 
     }
 
@@ -170,10 +157,56 @@ struct GameView: View {
         }
     }
 
+    private var voiceNoteControls: some View {
+        VStack {
+            if captain.recording { Text(captain.text).font(.body).lineLimit(3) }
+            if let error = captain.error { Text(error).font(.body) }
+            Button { Task { await captain.toggle(recorder: recorder) } } label: {
+                Label(captain.recording ? "journal.voice.stop" : "journal.voice.start",
+                      systemImage: captain.recording ? "stop.circle" : "mic")
+            }
+            .disabled(captain.busy).buttonStyle(.bordered).controlSize(.large)
+            .tint(.white).background(.black, in: Capsule()).accessibilityIdentifier("captainNote")
+        }.padding(.bottom, 8)
+    }
+
     private var journalButton: some View {
-        Button("Журнал экспедиций") {
-            Task { await engine.flushJournal(); showingJournal = true }
-        }.accessibilityIdentifier("openJournal").padding(8)
+        Button { showingArchives = true } label: {
+            Label("Журналы экспедиции", systemImage: "books.vertical")
+                .font(.body).foregroundStyle(Color.white)
+                .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(8)
+        .background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier("openJournal")
+    }
+
+    private var archiveLibrary: some View {
+        NavigationStack {
+            List {
+                Button("Закрыть") { showingArchives = false }.font(.body).frame(minHeight: 44).accessibilityIdentifier("closeArchives")
+                Button("События, реплей и граф") {
+                    Task { await engine.flushJournal(); showingJournal = true }
+                }.accessibilityIdentifier("openTelemetry")
+                Button("Подводное бюро расследований") { showingBureau = true }
+                    .accessibilityIdentifier("openBureau")
+                Button("Вахтенный журнал") { showingCaptainJournal = true }
+                    .accessibilityIdentifier("openCaptainJournal")
+                Button("Чёрный ящик и заметки") {
+                    Task { await recorder.drain(); showingBlackBox = true }
+                }.accessibilityIdentifier("openBlackBox")
+                Button("Реплики экипажа") { showingCrewJournal = true }
+                    .accessibilityIdentifier("openCrewJournal")
+            }
+            .foregroundStyle(.primary)
+            .navigationTitle("Журналы экспедиции")
+        }
+        .fullScreenCover(isPresented: $showingJournal) { ExpeditionJournalView() }
+        .fullScreenCover(isPresented: $showingBureau) { BureauView(journal: .shared) }
+        .fullScreenCover(isPresented: $showingCaptainJournal) { CaptainJournalView(logger: engine.captainLogger) }
+        .fullScreenCover(isPresented: $showingBlackBox) { BlackBoxJournal() }
+        .fullScreenCover(isPresented: $showingCrewJournal) { journalPanel }
     }
 
     private func largeTextInstruments(insets: EdgeInsets) -> some View {
@@ -195,6 +228,7 @@ struct GameView: View {
                 if engine.zone == .ocean {
                     Button("Карта экспедиции", action: openMap).accessibilityIdentifier("openMap")
                 }
+                voiceNoteControls
                 Button("Пауза", action: engine.pause).accessibilityIdentifier("pauseDive")
             }
             .buttonStyle(.bordered).controlSize(.large)
@@ -206,7 +240,6 @@ struct GameView: View {
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
         VStack(spacing: 0) {
-            journalButton
             (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())) {
                 brand
                 Spacer()
@@ -219,10 +252,6 @@ struct GameView: View {
                     .accessibilityLabel(A11yL10n.format("a11y.best.format", defaultValue: "Лучшая доставленная добыча: %lld", Int64(engine.bestScore)))
             }
             .padding(.top, max(insets.top, 48) + 12)
-            Button("Вахтенный журнал") { showingJournal = true }
-                .foregroundStyle(.white).frame(minHeight: 44)
-                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
-                .buttonStyle(.bordered)
             VStack(spacing: 12) {
                 Text("СВОБОДНЫЙ ОКЕАН")
                     .font(.system(.body, design: .monospaced).weight(.semibold))
@@ -261,8 +290,7 @@ struct GameView: View {
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
-                bureauButton
-                crewJournalButton
+                journalButton
                 Button {
                     garageMessage = ""
                     showingGarage = true
@@ -307,12 +335,12 @@ struct GameView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Text("Подлодка на прокачку").font(.title.bold()).accessibilityAddTraits(.isHeader)
-                    Text("Баланс: \(engine.crystals) кристаллов").font(.headline)
+                    Text("Баланс: \(engine.crystals) кристаллов").font(.body)
                     Text("Собирай ромбовидные кристаллы в океане: каждая находка даёт 10. Они сохраняются сразу, даже при поражении. Стили покупаются навсегда и меняют только внешность.")
                     Text("Установлено: \(engine.selectedStyle.title). \(engine.selectedStyle.description)")
                     ForEach(SubmarineStyle.allCases) { style in
                         VStack(alignment: .leading, spacing: 10) {
-                            Text(style.title).font(.headline).accessibilityAddTraits(.isHeader)
+                            Text(style.title).font(.body).accessibilityAddTraits(.isHeader)
                             Text(style.description)
                             Text(engine.selectedStyle == style ? "Выбрано" : (engine.owns(style) ? "Куплено" : "Цена: \(style.price) кристаллов"))
                             if !engine.owns(style), engine.crystals < style.price {
@@ -492,6 +520,7 @@ struct GameView: View {
     private func controls(insets: EdgeInsets) -> some View {
         VStack(spacing: 4) {
             Spacer()
+            voiceNoteControls
             if engine.energy < 25 {
                 Label("Мало энергии — ищи батарею или возвращайся", systemImage: "bolt.trianglebadge.exclamationmark")
                     .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.danger)
@@ -653,49 +682,37 @@ struct GameView: View {
         Label(text, systemImage: icon).font(.system(.body)).foregroundStyle(color)
     }
 
-    private var bureauButton: some View {
-        Button { showingBureau = true } label: {
-            Label("Подводное бюро расследований", systemImage: "doc.text.magnifyingglass")
-                .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(OceanPalette.white)
-        .background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityIdentifier("openBureau")
-    }
-
-    private var crewJournalButton: some View {
-        Button { showingCrewJournal = true } label: {
-            Label("Журнал экспедиции", systemImage: "book.closed")
-                .frame(maxWidth: .infinity, minHeight: 44)
-        }.accessibilityIdentifier("openCrewJournal")
-    }
-
     private var journalPanel: some View {
         NavigationStack {
-            List {
-                Section {
-                    Text("Последние 500 записей текущего запуска приложения. Реплики за бортом — выдержки из этого журнала.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                if engine.crewJournal.entries.isEmpty {
-                    Text("Журнал пуст. Начните экспедицию.")
-                }
-                ForEach(engine.crewJournal.entries.reversed()) { entry in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Экспедиция \(entry.expedition) · \(Int(entry.seconds)) с · \(entry.level.rawValue)")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text(entry.message).font(.headline)
-                        if let phrase = entry.crewPhrase { Text(phrase).foregroundStyle(OceanPalette.teal) }
-                        Text(entry.snapshot).font(.footnote)
-                        Text(entry.date, style: .time).font(.caption2).foregroundStyle(.secondary)
-                    }.accessibilityElement(children: .combine)
-                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Button("Готово") { showingCrewJournal = false }.font(.body).frame(minHeight: 44)
+                    Section {
+                        Text("Последние 500 записей текущего запуска приложения. Реплики за бортом — выдержки из этого журнала.")
+                            .font(.body).foregroundStyle(.secondary)
+                    }
+                    if engine.crewJournal.entries.isEmpty {
+                        Text("Журнал пуст. Начните экспедицию.").font(.body)
+                    }
+                    ForEach(engine.crewJournal.entries.reversed().prefix(crewVisibleLimit)) { entry in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Экспедиция \(entry.expedition) · \(Int(entry.seconds)) с · \(entry.level.rawValue)")
+                                .font(.body).foregroundStyle(.secondary)
+                            Text(entry.message).font(.body)
+                            if let phrase = entry.crewPhrase { Text(phrase).foregroundStyle(OceanPalette.teal) }
+                            Text(entry.snapshot).font(.body)
+                            Text(entry.date, style: .time).font(.body).foregroundStyle(.secondary)
+                        }.accessibilityElement(children: .combine)
+                    }
+                    if crewVisibleLimit < engine.crewJournal.entries.count {
+                        Button("Ещё записи") { crewVisibleLimit += 50 }
+                    }
+                }.font(.body).padding(24)
             }
             .navigationTitle("Бортовой журнал")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { showingCrewJournal = false } } }
         }
     }
+
 
     private var resultPanel: some View {
         let paused = engine.state == .paused
@@ -703,9 +720,6 @@ struct GameView: View {
         let title = paused ? "Можно выдохнуть." : (success ? "Груз доставлен." : "Океан сильнее.")
         let detail = paused ? "Экспедиция на паузе. Заряд сохраняется." : (success ? "Чёрный ящик на базе. Хорошая работа, капитан." : (engine.failureReason == .energy ? "Заряд закончился. Груз остался на глубине." : "Корпус не выдержал. Груз остался на глубине."))
         return VStack(spacing: 22) {
-            Button("Вахтенный журнал") { showingJournal = true }
-                .foregroundStyle(.white).frame(minHeight: 44)
-                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
 
             Image(systemName: paused ? "pause.fill" : (success ? "shippingbox.fill" : "water.waves"))
                 .font(.system(.title).weight(.medium)).foregroundStyle(success ? OceanPalette.gold : OceanPalette.teal)
@@ -737,15 +751,16 @@ struct GameView: View {
                            accessibilityTitle: A11yL10n.text("a11y.best.label", defaultValue: "Лучшая добыча"), highlighted: false)
             }
             .padding(.vertical, 16).background(OceanPalette.teal.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
-            if !paused, let diveID = engine.diveID {
-                LatestReceiptView(journal: .shared, diveID: diveID)
-            }
-            bureauButton
             VStack(spacing: 12) {
                 journalButton
                 if !paused {
-                    Button("Реплей") { Task { await engine.flushJournal(); showingReplay = true } }
-                        .accessibilityIdentifier("resultReplay")
+                    Button { Task { await engine.flushJournal(); showingReplay = true } } label: {
+                        Label("Реплей экспедиции", systemImage: "play.rectangle")
+                            .font(.body.weight(.semibold)).foregroundStyle(Color.white)
+                            .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).padding(8).background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityIdentifier("resultReplay")
                 }
                 Button {
                     if paused { engine.togglePause() } else { engine.startGame() }
@@ -763,13 +778,15 @@ struct GameView: View {
                         .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.teal)
                         .accessibilityLabel(A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"))
                 }
-                journalButton
                 Button { showingMap = false; engine.returnToMenu() } label: {
                     Text("На поверхность").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 }
                     .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
                     .accessibilityIdentifier("returnToMenu")
                     .accessibilityLabel(A11yL10n.text("a11y.return.menu", defaultValue: "На поверхность"))
+            }
+            if !paused, let diveID = engine.diveID {
+                LatestReceiptView(journal: .shared, diveID: diveID)
             }
         }
         .padding(25).frame(maxWidth: 360)

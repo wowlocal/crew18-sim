@@ -311,6 +311,8 @@ struct SituationSummary: Equatable {
 }
 
 enum GameEvent: Equatable {
+    case runStarted(UUID)
+    case runEnded(String)
     case diagnostic(BlackBoxLevel, BlackBoxCategory, String, [String: String])
     case speak(String)
     case danger(String)
@@ -357,6 +359,8 @@ struct JournalLeak {
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
     private(set) var expeditionId: String?
+    private let telemetryLogger: ExpeditionLogger
+    private var telemetryOpen = false
     private var journalTask: Task<Void, Never>?
     private var lastSnapshotTime: Double = -1
     private var lastSteeringTime: Double = -1
@@ -369,7 +373,7 @@ final class GameEngine: NSObject, ObservableObject {
         let prior = journalTask
         journalTask = Task {
             await prior?.value
-            await ExpeditionLogger.shared.log(expeditionId: id, type: type,
+            await telemetryLogger.log(expeditionId: id, type: type,
                 category: type == "snapshot" ? "State" : (type == "error" ? "Errors" : "Gameplay"),
                 severity: type == "error" ? "error" : "info", payload: payload)
         }
@@ -399,11 +403,16 @@ final class GameEngine: NSObject, ObservableObject {
 
     func flushJournal() async {
         await journalTask?.value
-        await ExpeditionLogger.shared.flush()
+        await telemetryLogger.flush()
+        receiptJournal.flush()
+        captainLogger.flush()
     }
 
     private func endJournal(result: String, reason: String) {
+        guard telemetryOpen else { return }
         journal("end", ["result": result, "reason": reason])
+        telemetryOpen = false
+        events.send(.runEnded(result))
     }
 
     private let receiptJournal: any ExpeditionLogging
@@ -534,6 +543,7 @@ final class GameEngine: NSObject, ObservableObject {
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
+         telemetryLogger: ExpeditionLogger = .shared,
          journal: any ExpeditionLogging = ExpeditionJournal.shared,
          captainLogger: CaptainLogger = .shared,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
@@ -546,6 +556,7 @@ final class GameEngine: NSObject, ObservableObject {
         saved.unlocked.insert(.classic)
         if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
         garage = saved
+        self.telemetryLogger = telemetryLogger
         self.receiptJournal = journal
         self.captainLogger = captainLogger
         self.defaults = defaults
@@ -699,11 +710,13 @@ final class GameEngine: NSObject, ObservableObject {
 
     func startGame() {
         if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "restart") }
-        expeditionId = UUID().uuidString
         lastSnapshotTime = -1
         lastSteeringTime = -1
         closeJournal("Экспедиция прервана: начато новое погружение")
         expeditionID = UUID()
+        expeditionId = expeditionID.uuidString
+        diveID = expeditionID
+        telemetryOpen = true
         expeditionNumber += 1
         journalLeak = nil
         nextLeakAt = 0
@@ -747,18 +760,18 @@ final class GameEngine: NSObject, ObservableObject {
         previousTimestamp = nil
         announcedCriticalHull = false
         announcedDockingHint = false
-        diveID = UUID()
+        dockingTooFast = false
+        events.send(.runStarted(expeditionID))
         state = .playing
         journalOpen = true
         nextSnapshot = 5
         log("start", "Дело открыто: экспедиция за чёрным ящиком")
+        log("Экспедиция началась", phrase: "Капитан: погружаемся!")
         announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
         updateCamera(dt: 1, snap: true)
-        state = .playing
         journal("start")
         navigate(to: "Game", reason: "start")
         journal("snapshot")
-        log("Экспедиция началась", phrase: "Капитан: погружаемся!")
     }
 
     func returnToMenu() {

@@ -101,7 +101,7 @@ final class LogStore {
     }
     /// Keep at most 50 finished runs and 32 MB of event payloads. Active runs are protected.
     func prune() throws {
-        try execute("DELETE FROM expeditions WHERE result!='active' AND id NOT IN (SELECT id FROM expeditions ORDER BY date DESC LIMIT 50)")
+        try execute("DELETE FROM expeditions WHERE result!='active' AND id NOT IN (SELECT id FROM expeditions WHERE result!='active' ORDER BY date DESC LIMIT 50)")
         while let size = try rows("SELECT COALESCE(SUM(length(json)),0) FROM events").first?.first,
               (Int(size) ?? 0) > 32 * 1024 * 1024 {
             let old = try rows("SELECT id FROM expeditions WHERE result!='active' ORDER BY date LIMIT 1")
@@ -122,7 +122,12 @@ actor ExpeditionLogger {
     private(set) var lastError: String?
     private(set) var droppedSnapshots = 0
     private(set) var batchCount = 0
-    init(path: String = LogStore.defaultPath) { self.path = path }
+    private let sleep: @Sendable () async throws -> Void
+    init(path: String = LogStore.defaultPath,
+         sleep: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(2)) }) {
+        self.path = path
+        self.sleep = sleep
+    }
     func log(expeditionId: String, type: String, category: String = "Gameplay", severity: String = "info", payload: [String: String] = [:]) {
         if type == "snapshot", pending.count >= 512 { droppedSnapshots += 1; return }
         let sequence = (sequences[expeditionId] ?? 0) + 1
@@ -130,8 +135,9 @@ actor ExpeditionLogger {
         pending.append(.init(expeditionId: expeditionId, sequenceNumber: sequence, timestamp: Date(), schemaVersion: 1, category: category, type: type, severity: severity, payload: payload))
         if pending.count >= 64 || type == "end" { flush() }
         if timer == nil {
+            let sleep = self.sleep
             timer = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(2))
+                do { try await sleep() } catch { return }
                 guard !Task.isCancelled else { return }
                 await self?.timedFlush()
             }
@@ -143,8 +149,9 @@ actor ExpeditionLogger {
         timer = nil
         flush()
         if !pending.isEmpty {
+            let sleep = self.sleep
             timer = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(2))
+                do { try await sleep() } catch { return }
                 guard !Task.isCancelled else { return }
                 await self?.timedFlush()
             }
@@ -166,7 +173,12 @@ actor ExpeditionLogger {
 actor LogReader {
     private let path: String
     private var store: LogStore?
-    init(path: String = LogStore.defaultPath) { self.path = path }
+    private let sleep: @Sendable () async throws -> Void
+    init(path: String = LogStore.defaultPath,
+         sleep: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(2)) }) {
+        self.path = path
+        self.sleep = sleep
+    }
     private func database() throws -> LogStore {
         if let store { return store }
         let opened = try LogStore(path: path); store = opened; return opened
@@ -258,6 +270,7 @@ struct ExpeditionJournalView: View {
     var body: some View {
         NavigationStack {
             List {
+                Button("Закрыть") { dismiss() }.font(.body).frame(minHeight: 44)
                 NavigationLink("Граф всех игр") { ExpeditionFlowView(expeditionId: nil) }
                     .accessibilityIdentifier("allFlows")
                 if let error { Text(error).foregroundStyle(.red) }
@@ -270,14 +283,14 @@ struct ExpeditionJournalView: View {
                             Text(run.date, style: .date)
                             Text(run.date, style: .time)
                             Text("\(run.result) · \(Int(run.duration)) с · Груз: \(run.cargo)")
-                            if !run.reason.isEmpty { Text(run.reason).font(.caption) }
+                            if !run.reason.isEmpty { Text(run.reason).font(.body) }
                         }
                     }.accessibilityIdentifier("expeditionRow")
                 }
                 if hasMore { Button("Ещё экспедиции") { Task { await load() } } }
             }
+            .font(.body)
             .navigationTitle("Журнал экспедиций")
-            .toolbar { Button("Закрыть") { dismiss() } }
             .task { await ExpeditionLogger.shared.flush(); await load() }
         }
     }
@@ -309,13 +322,14 @@ struct ExpeditionDetailView: View {
                 DisclosureGroup("\(event.sequenceNumber) · \(String(format: "%.1f", event.time)) с · \(event.type)") {
                     Text("\(event.timestamp.formatted()) · v\(event.schemaVersion) · \(event.severity)")
                     ForEach(event.payload.keys.sorted(), id: \.self) { key in
-                        Text("\(key): \(event.payload[key] ?? "")").font(.caption.monospaced()).textSelection(.enabled)
+                        Text("\(key): \(event.payload[key] ?? "")").font(.body.monospaced()).textSelection(.enabled)
                     }
                 }
             }
             if hasMore { Button("Ещё события") { Task { await load() } } }
         }
-        .navigationTitle("События")
+        .font(.body)
+            .navigationTitle("События")
         .task(id: category) { events = []; hasMore = true; await load() }
     }
     private func load() async {
@@ -340,36 +354,39 @@ struct ExpeditionReplayView: View {
             VStack(spacing: 16) {
                 if loading { ProgressView("Чтение реплея…") }
                 if let error { Text(error).foregroundStyle(.red) }
-                ReplayMap(state: timeline.state(at: time)).frame(height: 330)
+                TelemetryReplayMap(state: timeline.state(at: time)).frame(height: 330)
                     .accessibilityLabel("Положение лодки на записи")
                 Text("\(time, specifier: "%.1f") / \(timeline.duration, specifier: "%.1f") с")
                     .monospacedDigit().accessibilityIdentifier("replayTime")
                 Button(playing ? "Пауза" : "Воспроизвести") {
                     if time >= timeline.duration { time = 0 }
                     playing.toggle()
-                }.accessibilityIdentifier("replayPlay").disabled(timeline.duration <= 0)
+                }.frame(minHeight: 44).accessibilityIdentifier("replayPlay").disabled(timeline.duration <= 0)
                 Slider(value: $time, in: 0...max(0.001, timeline.duration)) { _ in playing = false }
                     .accessibilityLabel("Время реплея").accessibilityIdentifier("replayTimeline")
                 GeometryReader { geometry in
                     ForEach(timeline.highlights) { event in
-                        Button { playing = false; time = event.time } label: { Image(systemName: "bookmark.fill") }
+                        Button { playing = false; time = event.time } label: { Image(systemName: "bookmark.fill").frame(width: 44, height: 44).contentShape(Rectangle()) }
                             .accessibilityLabel("\(event.type), \(Int(event.time)) секунд")
-                            .position(x: 12 + (geometry.size.width - 24) * event.time / max(1, timeline.duration), y: 12)
+                            .position(x: 22 + (geometry.size.width - 44) * event.time / max(1, timeline.duration), y: 22)
                     }
-                }.frame(height: 30)
+                }.frame(height: 44)
                 ForEach(timeline.highlights) { event in
-                    Button("\(event.type) · \(Int(event.time)) с") { playing = false; time = event.time }
+                    Button { playing = false; time = event.time } label: {
+                        Text("\(event.type) · \(Int(event.time)) с").frame(minHeight: 44).contentShape(Rectangle())
+                    }
                         .accessibilityIdentifier("replayHighlight")
                 }
                 let state = timeline.state(at: time)
                 Text("Энергия: \(state["energy"] ?? "—") · Корпус: \(state["hull"] ?? "—")")
                 Text("Груз: \(state["cargo"] ?? "—") · Цель: \(state["target"] ?? "—")")
                 ForEach(timeline.events.filter { $0.type != "snapshot" && $0.time <= time && $0.time >= time - 3 }.suffix(5)) { event in
-                    Text(event.type).font(.caption)
+                    Text(event.type).font(.body)
                 }
             }.padding()
         }
-        .navigationTitle("Реплей")
+        .font(.body)
+            .navigationTitle("Реплей")
         .task {
             do {
                 let reader = LogReader()
@@ -396,7 +413,7 @@ struct ExpeditionReplayView: View {
     }
 }
 
-private struct ReplayMap: View {
+private struct TelemetryReplayMap: View {
     let state: [String: String]
     var body: some View {
         Canvas { context, size in
@@ -439,38 +456,40 @@ struct ExpeditionFlowView: View {
         ScrollView {
             VStack {
                 Text(expeditionId == nil ? "Все экспедиции" : "Эта экспедиция")
-                Canvas { context, size in
-                    let nodes = Array(Set(edges.flatMap { [$0.from, $0.to] })).sorted()
-                    func point(_ name: String) -> CGPoint {
-                        let index = nodes.firstIndex(of: name) ?? 0
-                        let angle = Double(index) / Double(max(1, nodes.count)) * 2 * .pi - .pi / 2
-                        return CGPoint(x: size.width / 2 + cos(angle) * size.width * 0.35, y: size.height / 2 + sin(angle) * size.height * 0.35)
-                    }
-                    for edge in edges {
-                        let a = point(edge.from), b = point(edge.to)
-                        let angle = atan2(b.y - a.y, b.x - a.x)
-                        let end = CGPoint(x: b.x - cos(angle) * 30, y: b.y - sin(angle) * 30)
-                        var path = Path(); path.move(to: a); path.addLine(to: end)
-                        path.move(to: CGPoint(x: end.x - cos(angle - 0.5) * 10, y: end.y - sin(angle - 0.5) * 10))
-                        path.addLine(to: end)
-                        path.addLine(to: CGPoint(x: end.x - cos(angle + 0.5) * 10, y: end.y - sin(angle + 0.5) * 10))
-                        context.stroke(path, with: .color(.cyan), lineWidth: 2)
-                        context.draw(Text("\(edge.count)").font(.caption).foregroundStyle(.orange), at: CGPoint(x: a.x * 0.4 + b.x * 0.6, y: a.y * 0.4 + b.y * 0.6 - 10))
-                    }
-                    for node in nodes {
-                        context.draw(Text(node).font(.caption.bold()).foregroundStyle(.white), at: point(node))
-                    }
-                }.frame(height: 330).accessibilityHidden(true)
                 if edges.isEmpty { Text("Переходов пока нет") }
-                ForEach(edges) { edge in Text("\(edge.from) → \(edge.to): \(edge.count)") }
+                FlowGraphRows(edges: edges)
                 if let error { Text(error).foregroundStyle(.red) }
             }.padding()
         }
-        .navigationTitle("Граф переходов")
+        .font(.body)
+            .navigationTitle("Граф переходов")
         .accessibilityIdentifier("flowGraph")
         .task {
             do { edges = try await LogReader().transitions(expeditionId: expeditionId) }
             catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+
+struct FlowGraphRows: View {
+    let edges: [FlowEdge]
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    var body: some View {
+        VStack(spacing: 16) {
+            ForEach(edges) { edge in
+                (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout()) : AnyLayout(HStackLayout())) {
+                    Text(edge.from).fixedSize(horizontal: false, vertical: true)
+                    Image(systemName: dynamicTypeSize.isAccessibilitySize ? "arrow.down" : "arrow.right")
+                    Text(edge.to).fixedSize(horizontal: false, vertical: true)
+                    Text("×\(edge.count)").monospacedDigit()
+                }
+                .font(.body).foregroundStyle(.primary).padding(12)
+                .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(edge.from) → \(edge.to): \(edge.count)")
+            }
         }
     }
 }
@@ -694,6 +713,7 @@ struct BureauView: View {
     var body: some View {
         NavigationStack {
             List {
+                Button("Готово") { dismiss() }.font(.body).frame(minHeight: 44)
                 Section {
                     Text("Подводное бюро расследований").font(.title2.bold())
                     Text("Каждое погружение — отдельное дело. Чек расскажет, куда ушла батарейка и почему помят корпус.")
@@ -707,15 +727,15 @@ struct BureauView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(receipt.date, style: .date) + Text(" · ") + Text(receipt.date, style: .time)
                             Text(receipt.outcome)
-                            Text("Дело №\(receipt.id.uuidString.prefix(8))").font(.caption.monospaced())
+                            Text("Дело №\(receipt.id.uuidString.prefix(8))").font(.body.monospaced())
                         }
                     }.accessibilityIdentifier("diveCase")
                 }
                 if loading { ProgressView("Открываем дела…") }
                 if hasMore && !loading && error == nil { Button("Ещё дела") { Task { await load() } } }
             }
+            .font(.body)
             .navigationTitle("Бюро расследований")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }
             .task { if receipts.isEmpty { await load() } }
         }
     }
@@ -737,7 +757,7 @@ struct ReceiptPaper: View {
     let receipt: DiveReceipt
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("ПОДВОДНОЕ БЮРО РАССЛЕДОВАНИЙ").font(.headline)
+            Text("ПОДВОДНОЕ БЮРО РАССЛЕДОВАНИЙ").font(.body)
             Text("ЧЕК · \(receipt.id.uuidString.prefix(8))")
             Text(receipt.date.formatted(date: .abbreviated, time: .standard))
             Divider()
@@ -794,9 +814,9 @@ private struct DiveCaseView: View {
             Section("Хронология · события и приборы") {
                 ForEach(entries) { entry in
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(String(format: "+%.1f с · %@", entry.elapsed, entry.severity)).font(.caption.monospaced())
+                        Text(String(format: "+%.1f с · %@", entry.elapsed, entry.severity)).font(.body.monospaced())
                         Text(entry.message).bold()
-                        Text(entry.kind).font(.caption.monospaced())
+                        Text(entry.kind).font(.body.monospaced())
                         Text(String(format: "Энергия %.1f · корпус %d/3 · груз %d", entry.boat.energy, entry.boat.hull, entry.boat.cargo))
                         Text(String(format: "Координаты %.0f, %.0f · скорость %.1f", entry.boat.x, entry.boat.y, entry.boat.speed))
                         Text("\(entry.boat.zone) · \(entry.boat.state) · щит: \(entry.boat.shield ? "да" : "нет") · ящик: \(entry.boat.blackBox ? "да" : "нет")")
@@ -807,7 +827,8 @@ private struct DiveCaseView: View {
                 if hasMore && !loading && error == nil { Button("Ещё события") { Task { await load() } } }
             }
         }
-        .navigationTitle("Дело №\(diveID.uuidString.prefix(8))")
+        .font(.body)
+            .navigationTitle("Дело №\(diveID.uuidString.prefix(8))")
         .task { if entries.isEmpty { await load() } }
     }
     @MainActor private func load() async {
@@ -938,13 +959,14 @@ struct CaptainJournalView: View {
     @State private var entries: [CaptainLogger.Entry] = []
     @State private var storageError: String?
     @State private var query = ""
+    @State private var visibleLimit = 50
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 20) {
                 Text("Вахтенный журнал").font(.title).accessibilityAddTraits(.isHeader)
                 Button("Готово") { dismiss() }
-                Text("Степень трезвости").font(.headline)
+                Text("Степень трезвости").font(.body)
                 ForEach(CaptainLogger.Sobriety.allCases, id: \.self) { value in
                     Button {
                         sobriety = value
@@ -957,9 +979,9 @@ struct CaptainJournalView: View {
                 TextField("Поиск событий", text: $query).textFieldStyle(.roundedBorder)
                 Button("Обновить") { Task { await reload() } }
                 if let storageError { Text(storageError) }
-                Text("Последние записи · до 2000").font(.headline)
+                Text("Последние записи · до 2000").font(.body)
                 if entries.isEmpty { Text("Вахтенный журнал пока пуст.") }
-                ForEach(entries.filter { query.isEmpty || $0.message.localizedCaseInsensitiveContains(query) || $0.event.localizedCaseInsensitiveContains(query) }) { entry in
+                ForEach(entries.filter { query.isEmpty || $0.message.localizedCaseInsensitiveContains(query) || $0.event.localizedCaseInsensitiveContains(query) }.prefix(visibleLimit)) { entry in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(entry.date, format: .dateTime.day().month().hour().minute().second())
                         Text(entry.message)
@@ -972,7 +994,9 @@ struct CaptainJournalView: View {
                     .accessibilityElement(children: .combine)
                     Divider()
                 }
+                if visibleLimit < entries.count { Button("Ещё записи") { visibleLimit += 50 }.font(.body) }
             }
+            .font(.body)
             .padding(24)
             .buttonStyle(.bordered)
             .controlSize(.large)
@@ -983,6 +1007,7 @@ struct CaptainJournalView: View {
         .preferredColorScheme(.light)
         .task { await reload() }
         .refreshable { await reload() }
+        .onChange(of: query) { _, _ in visibleLimit = 50 }
     }
 
     private func reload() async {
@@ -999,7 +1024,7 @@ enum BlackBoxCategory: String, Codable, CaseIterable, Sendable { case state, con
 struct BlackBoxEntry: Codable, Identifiable, Sendable, Equatable {
     var id = UUID()
     let runID: UUID
-    let seq: Int
+    var seq: Int
     let t: TimeInterval
     let wallTime: Date
     var schemaVersion = 1
@@ -1099,24 +1124,37 @@ actor BlackBox {
     private var timer: Task<Void, Never>?
     private var writing = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
-    private var initialized = false
     private var recovered = false
-    private var recoveryTask: Task<Int, Never>?
+    private var recoveryTask: Task<Int, Error>?
+    private(set) var storageError: String?
+    private let storeFactory: @Sendable () throws -> BlackBoxStore
     private let now: @Sendable () -> Date
     private let sleep: @Sendable () async throws -> Void
     init(store: BlackBoxStore? = nil, now: @escaping @Sendable () -> Date = { Date() },
-         sleep: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(3)) }) {
-        self.store = store; self.now = now; self.sleep = sleep
+         sleep: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(3)) },
+         storeFactory: @escaping @Sendable () throws -> BlackBoxStore = {
+             BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self))
+         }) {
+        self.store = store; self.now = now; self.sleep = sleep; self.storeFactory = storeFactory
     }
-    func reader() -> BlackBoxReader? { prepare(); return store.map { BlackBoxReader(store: $0) } }
+    func reader() async -> BlackBoxReader? {
+        await recover()
+        return recovered ? store.map { BlackBoxReader(store: $0) } : nil
+    }
     private func prepare() {
-        guard !initialized else { return }; initialized = true
-        do { if store == nil { store = BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self)) } }
-        catch { output.error("Database unavailable: \(error.localizedDescription)") }
+        if store == nil {
+            do { store = try storeFactory() }
+            catch {
+                storageError = error.localizedDescription
+                output.error("Database unavailable: \(error.localizedDescription)")
+            }
+        }
+        guard timer == nil else { return }
         let sleep = self.sleep
         timer = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await sleep() } catch { return }
+                guard self != nil else { return }
                 await self?.flush()
             }
         }
@@ -1124,16 +1162,23 @@ actor BlackBox {
     func recover() async {
         guard !recovered else { return }
         prepare()
+        guard let store else { return }
         if recoveryTask == nil {
-            let store = self.store, output = self.output
-            recoveryTask = Task {
-                do { return try await store?.recoverAndPrune() ?? 0 }
-                catch { output.error("Recovery failed: \(error.localizedDescription)"); return 0 }
-            }
+            recoveryTask = Task { try await store.recoverAndPrune() }
         }
-        let restored = await recoveryTask?.value ?? 0
-        sequence = max(sequence, restored)
-        recovered = true
+        do {
+            let restored = try await recoveryTask?.value ?? 0
+            guard !recovered else { return }
+            // Events buffered before the disk became available follow the persisted sequence.
+            for index in buffer.indices { buffer[index].seq += restored }
+            sequence += restored
+            recovered = true
+            storageError = nil
+        } catch {
+            storageError = error.localizedDescription
+            recoveryTask = nil
+            output.error("Recovery failed: \(error.localizedDescription)")
+        }
     }
     func log(_ level: BlackBoxLevel = .info, _ category: BlackBoxCategory, _ message: String,
              attrs: [String: String] = [:], runID: UUID, t: TimeInterval) async {
@@ -1148,6 +1193,8 @@ actor BlackBox {
         if buffer.count >= 64 { await flush() }
     }
     func flush() async {
+        await recover()
+        guard recovered else { return }
         if writing {
             await withCheckedContinuation { waiters.append($0) }
             await flush(); return
@@ -1158,7 +1205,11 @@ actor BlackBox {
         do {
             try await store.write(batch)
             let ids = Set(batch.map(\.id)); buffer.removeAll { ids.contains($0.id) }
-        } catch { output.error("Flush failed: \(error.localizedDescription)") }
+            storageError = nil
+        } catch {
+            storageError = error.localizedDescription
+            output.error("Flush failed: \(error.localizedDescription)")
+        }
         writing = false
         let pending = waiters; waiters = []; pending.forEach { $0.resume() }
     }
@@ -1173,36 +1224,35 @@ actor BlackBox {
     private var started = ProcessInfo.processInfo.systemUptime
     private var active = false
     private var ticks = 0
-    private var pendingStartEvents: [String] = []
+    private weak var engine: GameEngine?
     private var screen = "launch"
     init(engine: GameEngine, logger: BlackBox = .shared) {
         self.logger = logger
+        self.engine = engine
         tail = Task { await logger.recover() }
         record(.system, "app.launch")
         if let error = engine.garageLoadError { record(.system, "garage.load.failed", level: .error, attrs: ["reason": error]) }
         subscription = engine.events.sink { [weak self, weak engine] event in
             guard let self, let engine else { return }
             switch event {
+            case .runStarted(let id):
+                let sessionID = runID
+                runID = id; active = true; ticks = 0
+                record(.state, "run.start", attrs: ["sessionID": sessionID.uuidString, "style": engine.selectedStyle.rawValue,
+                    "night": String(UserDefaults.standard.bool(forKey: "podlodkaDive.nightExpedition")), "best": String(engine.bestScore)])
+                snapshot(engine.situationSummary, boundary: true)
+            case .runEnded(let outcome):
+                guard active else { return }
+                snapshot(engine.situationSummary, boundary: true)
+                record(.state, "run.end", attrs: ["outcome": outcome, "score": String(engine.score), "best": String(engine.bestScore), "reason": String(describing: engine.failureReason)])
+                active = false; flush()
+                runID = UUID(); started = ProcessInfo.processInfo.systemUptime
             case .stateChanged(let state):
-                if state == .playing && !active {
-                    let sessionID = runID
-                    runID = UUID(); started = ProcessInfo.processInfo.systemUptime; active = true; ticks = 0
-                    record(.state, "run.start", attrs: ["sessionID": sessionID.uuidString, "style": engine.selectedStyle.rawValue,
-                        "night": String(UserDefaults.standard.bool(forKey: "podlodkaDive.nightExpedition")), "best": String(engine.bestScore)])
-                    snapshot(engine.situationSummary, boundary: true)
-                    for text in pendingStartEvents { record(.event, text) }; pendingStartEvents = []
-                }
                 record(.state, String(describing: state)); flow(String(describing: state))
-                if state == .completed || state == .gameOver || (state == .ready && active) {
-                    snapshot(engine.situationSummary, boundary: true)
-                    record(.state, "run.end", attrs: ["outcome": String(describing: state), "score": String(engine.score), "best": String(engine.bestScore), "reason": String(describing: engine.failureReason)])
-                    active = false; flush()
-                    runID = UUID(); started = ProcessInfo.processInfo.systemUptime
-                }
             case .situation(let summary): ticks += 1; if ticks % 4 == 0 { snapshot(summary) }
             case .danger(let text): record(.hazard, text, level: .warning); snapshot(engine.situationSummary, boundary: true)
             case .speak(let text):
-                if !active && engine.state != .playing { pendingStartEvents.append(text) } else { record(.event, text) }
+                record(.event, text)
             case .energyLow: record(.resource, "energyLow", level: .warning)
             case .objectiveChanged(let value): record(.event, "blackBox", attrs: ["collected": String(value)])
             case .success(let score): record(.event, "success", attrs: ["score": String(score)])
@@ -1211,7 +1261,7 @@ actor BlackBox {
             }
         }
     }
-    func timestamp() -> (UUID, Double) { (runID, ProcessInfo.processInfo.systemUptime - started) }
+    func timestamp() -> (UUID, Double) { (runID, active ? (engine?.runElapsed ?? 0) : ProcessInfo.processInfo.systemUptime - started) }
     func record(_ category: BlackBoxCategory, _ message: String, level: BlackBoxLevel = .info, attrs: [String: String] = [:], timestamp: (UUID, Double)? = nil) {
         let logger = self.logger
         let captured = timestamp ?? self.timestamp()
@@ -1251,12 +1301,14 @@ actor BlackBox {
         guard let recognizer = SFSpeechRecognizer(locale: .current), recognizer.isAvailable,
               recognizer.supportsOnDeviceRecognition else { throw NoteError.unavailable }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement); try session.setActive(true)
+        try session.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker]); try session.setActive(true)
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true; request.shouldReportPartialResults = true
         self.request = request
         let input = audio.inputNode
-        input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in request.append(buffer) }
+        let format = input.outputFormat(forBus: 0)
+        guard format.channelCount > 0, format.sampleRate > 0 else { stop(); throw NoteError.unavailable }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
         installed = true
         task = recognizer.recognitionTask(with: request) { result, error in
             if let error { Task { @MainActor in failure(error.localizedDescription) } }
@@ -1291,15 +1343,24 @@ actor BlackBox {
         generation += 1; let attempt = generation
         timestamp = recorder.timestamp()
         do {
-            try await transcriber.start(update: { [weak self] in self?.text = $0 }, failure: { [weak self] reason in
-                guard let self, self.recording else { return }
+            try await transcriber.start(update: { [weak self] text in
+                guard let self, self.generation == attempt else { return }
+                self.text = text
+            }, failure: { [weak self] reason in
+                guard let self, self.generation == attempt else { return }
                 self.error = reason; self.finish(recorder: recorder)
                 recorder.record(.captain, "voice.failed", level: .error, attrs: ["reason": reason])
             })
             guard generation == attempt else { transcriber.stop(); busy = false; return }
             recording = true
         }
-        catch { self.error = error.localizedDescription; recorder.record(.captain, "voice.denied", level: .error, attrs: ["reason": error.localizedDescription]) }
+        catch {
+            transcriber.stop()
+            if generation == attempt {
+                self.error = error.localizedDescription
+                recorder.record(.captain, "voice.denied", level: .error, attrs: ["reason": error.localizedDescription])
+            }
+        }
         busy = false
     }
     func finish(recorder: BlackBoxRecorder) {
@@ -1349,16 +1410,18 @@ struct BlackBoxJournal: View {
             List {
                 Button("journal.close") { dismiss() }.font(.body).frame(minHeight: 44)
                 if !error.isEmpty { Text(error) }
-                NavigationLink("journal.flow") { JournalTimeline(reader: reader, runID: nil) }
+                NavigationLink("journal.flow") { JournalTimeline(reader: reader, runID: nil) }.accessibilityIdentifier("blackBoxFlow")
                 ForEach(runs, id: \.self) { id in
                     NavigationLink(id.uuidString.prefix(8)) { JournalTimeline(reader: reader, runID: id) }.accessibilityIdentifier("journalRun")
                 }
                 if runs.isEmpty { Text("journal.empty") }
             }
+            .font(.body)
             .navigationTitle("journal.title")
             .task {
                 await BlackBox.shared.flush()
                 reader = await BlackBox.shared.reader()
+                if let failure = await BlackBox.shared.storageError { error = failure }
                 do { runs = try await reader?.runs() ?? []; if reader == nil { error = String(localized: "journal.storage.error") } }
                 catch { self.error = error.localizedDescription }
             }
@@ -1374,12 +1437,14 @@ struct JournalTimeline: View {
     @State private var playing = false
     @State private var error = ""
     @State private var exportURL: URL?
+    @State private var spokenEvent: UUID?
+    @State private var visibleLimit = 100
     private var samples: [ReplaySample] { entries.compactMap(ReplaySample.init).sorted { $0.t < $1.t } }
     private var duration: Double { max(entries.map(\.t).max() ?? 0, 0.001) }
     private var filtered: [BlackBoxEntry] { entries.filter { category == "all" || $0.category.rawValue == category } }
     var body: some View {
-        ScrollViewReader { proxy in
-            List {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
                 if !error.isEmpty { Text(error) }
                 if runID != nil {
                     Section("journal.replay") {
@@ -1387,9 +1452,14 @@ struct JournalTimeline: View {
                         if let sample = ReplaySample.interpolate(samples, at: time) {
                             Text("E \(Int(sample.energy))% · ♥ \(Int(sample.hull)) · \(Int(sample.speed)) m/s")
                         }
+                        Text("\(time, specifier: "%.1f") / \(duration, specifier: "%.1f") с")
+                            .accessibilityIdentifier("replayTime")
                         Slider(value: $time, in: 0...duration).accessibilityIdentifier("replaySeek").accessibilityLabel(Text("journal.seek"))
                             .accessibilityValue(Text("\(Int(time)) s"))
-                        Button(playing ? "journal.pause" : "journal.play") { playing.toggle() }
+                        Button { playing.toggle() } label: {
+                            Text(playing ? "journal.pause" : "journal.play")
+                                .font(.body).frame(minHeight: 44).contentShape(Rectangle())
+                        }
                     }
                 }
                 Section("journal.flow") { FlowGraph(entries: entries).frame(minHeight: 220) }
@@ -1397,28 +1467,33 @@ struct JournalTimeline: View {
                     Text("journal.all").tag("all")
                     ForEach(BlackBoxCategory.allCases, id: \.rawValue) { Text(LocalizedStringKey("journal.category." + $0.rawValue)).tag($0.rawValue) }
                 }
-                if let exportURL { ShareLink(item: exportURL) { Label("journal.export", systemImage: "square.and.arrow.up") } }
-                ShareLink(item: entries.map { "\(Int($0.t))s [\($0.category.rawValue)] \($0.message)" }.joined(separator: "\n")) { Text("journal.summary") }
-                ForEach(filtered) { entry in
+                if let exportURL { ShareLink(item: exportURL) { Label("journal.export", systemImage: "square.and.arrow.up").frame(minHeight: 44).contentShape(Rectangle()) } }
+                ShareLink(item: entries.map { "\(Int($0.t))s [\($0.category.rawValue)] \($0.message)" }.joined(separator: "\n")) { Text("journal.summary").frame(minHeight: 44).contentShape(Rectangle()) }
+                ForEach(filtered.prefix(visibleLimit)) { entry in
                     Button { time = entry.t; playing = false; UIAccessibility.post(notification: .announcement, argument: entry.message) } label: {
                         VStack(alignment: .leading) {
-                            Text("\(Int(entry.t))s · \(entry.category.rawValue)").font(.caption)
+                            Text("\(Int(entry.t))s · \(entry.category.rawValue)").font(.body)
                             Text(entry.category == .captain ? "“\(entry.message)”" : entry.message)
-                        }
-                    }.id(entry.id)
-                    .listRowBackground(abs(entry.t - time) < 0.5 ? Color.accentColor.opacity(0.15) : Color.clear)
+                        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                    }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(8)
+                    .background(abs(entry.t - time) < 0.5 ? Color.accentColor.opacity(0.15) : Color.clear)
                 }
+                if visibleLimit < filtered.count { Button { visibleLimit += 100 } label: { Text("Ещё события").frame(minHeight: 44).contentShape(Rectangle()) } }
             }
+            .font(.body).foregroundStyle(.primary).buttonStyle(.plain).padding(20)
+            .onChange(of: category) { _, _ in visibleLimit = 100 }
             .onChange(of: time) { _, value in
                 if let entry = filtered.last(where: { $0.t <= value }) {
-                    if playing { proxy.scrollTo(entry.id) }
-                    if abs(entry.t - value) < 0.11 && entry.category != .state {
+                    if abs(entry.t - value) < 0.11 && entry.category != .state && spokenEvent != entry.id {
+                        spokenEvent = entry.id
                         UIAccessibility.post(notification: .announcement, argument: entry.message)
                     }
                 }
             }
         }
-        .navigationTitle("journal.title")
+        .font(.body)
+            .navigationTitle("journal.title")
         .task {
             do {
                 entries = try await reader?.all(runID: runID) ?? []
@@ -1471,7 +1546,7 @@ struct ReplayMap: View {
                     let p = point(sample.x, sample.y)
                     context.fill(Path(ellipseIn: CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)), with: .color(.orange))
                     if entry.category == .captain && abs(entry.t - time) < 3 {
-                        context.draw(Text("“\(entry.message.prefix(40))”").font(.caption), at: CGPoint(x: p.x, y: p.y - 16))
+                        context.draw(Text("“\(entry.message.prefix(40))”").font(.body), at: CGPoint(x: p.x, y: p.y - 16))
                     }
                 }
             }
@@ -1491,35 +1566,11 @@ struct FlowGraph: View {
     }
     var body: some View {
         VStack(alignment: .leading) {
-            Canvas { context, size in
-                let transitions = entries.filter { $0.category == .flow }
-                let nodes = Set(transitions.flatMap { [$0.attrs["from"] ?? "?", $0.attrs["to"] ?? "?"] }).sorted()
-                func position(_ name: String) -> CGPoint {
-                    let index = nodes.firstIndex(of: name) ?? 0
-                    let angle = Double(index) * 2 * .pi / Double(max(nodes.count, 1))
-                    return CGPoint(x: size.width / 2 + cos(angle) * size.width * 0.34,
-                                   y: size.height / 2 + sin(angle) * size.height * 0.34)
-                }
-                for key in edges.keys.sorted() {
-                    let parts = key.components(separatedBy: " → ")
-                    guard parts.count == 2 else { continue }
-                    let a = position(parts[0]), b = position(parts[1])
-                    var path = Path(); path.move(to: a); path.addLine(to: b)
-                    context.stroke(path, with: .color(.teal.opacity(0.6)), lineWidth: CGFloat(min(edges[key] ?? 1, 5)))
-                    let angle = atan2(b.y - a.y, b.x - a.x)
-                    let tip = CGPoint(x: a.x + (b.x - a.x) * 0.75, y: a.y + (b.y - a.y) * 0.75)
-                    var arrow = Path(); arrow.move(to: tip)
-                    arrow.addLine(to: CGPoint(x: tip.x - cos(angle - 0.5) * 8, y: tip.y - sin(angle - 0.5) * 8))
-                    arrow.move(to: tip)
-                    arrow.addLine(to: CGPoint(x: tip.x - cos(angle + 0.5) * 8, y: tip.y - sin(angle + 0.5) * 8))
-                    context.stroke(arrow, with: .color(.teal), lineWidth: 2)
-                    context.draw(Text("\(edges[key] ?? 0)").font(.caption), at: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2))
-                }
-                for node in nodes {
-                    context.draw(Text(node).font(.caption).bold(), at: position(node))
-                }
-            }.frame(height: 240).accessibilityHidden(true)
-            ForEach(edges.keys.sorted(), id: \.self) { Text("\($0): \(edges[$0] ?? 0)").font(.caption) }
+            FlowGraphRows(edges: edges.keys.sorted().compactMap { key in
+                let parts = key.components(separatedBy: " → ")
+                guard parts.count == 2 else { return nil }
+                return FlowEdge(from: parts[0], to: parts[1], count: edges[key] ?? 0)
+            })
         }
     }
 }
@@ -1846,6 +1897,8 @@ struct SituationSummary: Equatable {
 }
 
 enum GameEvent: Equatable {
+    case runStarted(UUID)
+    case runEnded(String)
     case diagnostic(BlackBoxLevel, BlackBoxCategory, String, [String: String])
     case speak(String)
     case danger(String)
@@ -1892,6 +1945,8 @@ struct JournalLeak {
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
     private(set) var expeditionId: String?
+    private let telemetryLogger: ExpeditionLogger
+    private var telemetryOpen = false
     private var journalTask: Task<Void, Never>?
     private var lastSnapshotTime: Double = -1
     private var lastSteeringTime: Double = -1
@@ -1904,7 +1959,7 @@ final class GameEngine: NSObject, ObservableObject {
         let prior = journalTask
         journalTask = Task {
             await prior?.value
-            await ExpeditionLogger.shared.log(expeditionId: id, type: type,
+            await telemetryLogger.log(expeditionId: id, type: type,
                 category: type == "snapshot" ? "State" : (type == "error" ? "Errors" : "Gameplay"),
                 severity: type == "error" ? "error" : "info", payload: payload)
         }
@@ -1934,11 +1989,16 @@ final class GameEngine: NSObject, ObservableObject {
 
     func flushJournal() async {
         await journalTask?.value
-        await ExpeditionLogger.shared.flush()
+        await telemetryLogger.flush()
+        receiptJournal.flush()
+        captainLogger.flush()
     }
 
     private func endJournal(result: String, reason: String) {
+        guard telemetryOpen else { return }
         journal("end", ["result": result, "reason": reason])
+        telemetryOpen = false
+        events.send(.runEnded(result))
     }
 
     private let receiptJournal: any ExpeditionLogging
@@ -2069,6 +2129,7 @@ final class GameEngine: NSObject, ObservableObject {
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
+         telemetryLogger: ExpeditionLogger = .shared,
          journal: any ExpeditionLogging = ExpeditionJournal.shared,
          captainLogger: CaptainLogger = .shared,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
@@ -2081,6 +2142,7 @@ final class GameEngine: NSObject, ObservableObject {
         saved.unlocked.insert(.classic)
         if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
         garage = saved
+        self.telemetryLogger = telemetryLogger
         self.receiptJournal = journal
         self.captainLogger = captainLogger
         self.defaults = defaults
@@ -2234,11 +2296,13 @@ final class GameEngine: NSObject, ObservableObject {
 
     func startGame() {
         if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "restart") }
-        expeditionId = UUID().uuidString
         lastSnapshotTime = -1
         lastSteeringTime = -1
         closeJournal("Экспедиция прервана: начато новое погружение")
         expeditionID = UUID()
+        expeditionId = expeditionID.uuidString
+        diveID = expeditionID
+        telemetryOpen = true
         expeditionNumber += 1
         journalLeak = nil
         nextLeakAt = 0
@@ -2282,18 +2346,18 @@ final class GameEngine: NSObject, ObservableObject {
         previousTimestamp = nil
         announcedCriticalHull = false
         announcedDockingHint = false
-        diveID = UUID()
+        dockingTooFast = false
+        events.send(.runStarted(expeditionID))
         state = .playing
         journalOpen = true
         nextSnapshot = 5
         log("start", "Дело открыто: экспедиция за чёрным ящиком")
+        log("Экспедиция началась", phrase: "Капитан: погружаемся!")
         announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
         updateCamera(dt: 1, snap: true)
-        state = .playing
         journal("start")
         navigate(to: "Game", reason: "start")
         journal("snapshot")
-        log("Экспедиция началась", phrase: "Капитан: погружаемся!")
     }
 
     func returnToMenu() {
@@ -3618,7 +3682,7 @@ final class VoiceOverAnnouncer: ObservableObject {
             return
         }
         switch event {
-        case .diagnostic: break
+        case .diagnostic, .runStarted, .runEnded: break
         case .danger(let text): enqueue(key: "danger", text: text, priority: .danger)
         case .speak(let text): enqueue(key: "speech:\(text)", text: text, priority: .event)
         case .energyLow:
@@ -3751,6 +3815,7 @@ struct ContentView: View {
     @StateObject private var recorder: BlackBoxRecorder
     @StateObject private var captain = CaptainNote()
     @State private var showingBlackBox = false
+    @State private var showingArchives = false
     @StateObject private var announcer: VoiceOverAnnouncer
     @AccessibilityFocusState private var focusedControl: String?
     @Environment(\.scenePhase) private var scenePhase
@@ -3759,6 +3824,7 @@ struct ContentView: View {
     @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
     @State private var showingMap = false
     @State private var showingCrewJournal = false
+    @State private var crewVisibleLimit = 50
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
     @State private var showingGarage = false
     @State private var showingJournal = false
@@ -3873,9 +3939,8 @@ struct ContentView: View {
         .onChange(of: showingGarage) { _, visible in engine.navigate(to: visible ? "Garage" : "Welcome", reason: visible ? "openGarage" : "closeGarage") }
         .onChange(of: showingJournal) { _, visible in engine.navigate(to: visible ? "Journal" : journalReturnScreen, reason: visible ? "openJournal" : "closeJournal") }
         .onChange(of: showingReplay) { _, visible in engine.navigate(to: visible ? "Replay" : journalReturnScreen, reason: visible ? "openReplay" : "closeReplay") }
-        .sheet(isPresented: $showingCrewJournal) { journalPanel }
+        .fullScreenCover(isPresented: $showingArchives) { archiveLibrary }
         .sheet(isPresented: $showingGarage) { garagePanel }
-        .sheet(isPresented: $showingJournal) { ExpeditionJournalView() }
         .sheet(isPresented: $showingReplay) {
             if let id = engine.expeditionId {
                 NavigationStack {
@@ -3884,24 +3949,10 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingBlackBox) { BlackBoxJournal() }
         .onChange(of: showingMap) { _, value in recorder.flow(value ? "map" : String(describing: engine.state)) }
         .onChange(of: showingGarage) { _, value in recorder.flow(value ? "garage" : "ready") }
         .onChange(of: showingBlackBox) { _, value in recorder.flow(value ? "journal" : String(describing: engine.state)) }
         .onChange(of: engine.state) { _, state in if state != .playing { captain.finish(recorder: recorder) } }
-        .overlay(alignment: .bottom) {
-            if engine.state == .playing {
-                VStack {
-                    if captain.recording { Text(captain.text).font(.caption).lineLimit(3) }
-                    if let error = captain.error { Text(error).font(.caption) }
-                    Button { Task { await captain.toggle(recorder: recorder) } } label: {
-                        Label(captain.recording ? "journal.voice.stop" : "journal.voice.start", systemImage: captain.recording ? "stop.circle" : "mic")
-                    }.disabled(captain.busy).buttonStyle(.bordered).controlSize(.large).tint(.white).background(.black, in: Capsule()).accessibilityIdentifier("captainNote")
-                }.padding(.bottom, 8)
-            }
-        }
-        .sheet(isPresented: $showingBureau) { BureauView(journal: .shared) }
-        .sheet(isPresented: $showingCaptainJournal) { CaptainJournalView(logger: engine.captainLogger) }
 
     }
 
@@ -3914,10 +3965,56 @@ struct ContentView: View {
         }
     }
 
+    private var voiceNoteControls: some View {
+        VStack {
+            if captain.recording { Text(captain.text).font(.body).lineLimit(3) }
+            if let error = captain.error { Text(error).font(.body) }
+            Button { Task { await captain.toggle(recorder: recorder) } } label: {
+                Label(captain.recording ? "journal.voice.stop" : "journal.voice.start",
+                      systemImage: captain.recording ? "stop.circle" : "mic")
+            }
+            .disabled(captain.busy).buttonStyle(.bordered).controlSize(.large)
+            .tint(.white).background(.black, in: Capsule()).accessibilityIdentifier("captainNote")
+        }.padding(.bottom, 8)
+    }
+
     private var journalButton: some View {
-        Button("Журнал экспедиций") {
-            Task { await engine.flushJournal(); showingJournal = true }
-        }.accessibilityIdentifier("openJournal").padding(8)
+        Button { showingArchives = true } label: {
+            Label("Журналы экспедиции", systemImage: "books.vertical")
+                .font(.body).foregroundStyle(Color.white)
+                .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(8)
+        .background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier("openJournal")
+    }
+
+    private var archiveLibrary: some View {
+        NavigationStack {
+            List {
+                Button("Закрыть") { showingArchives = false }.font(.body).frame(minHeight: 44).accessibilityIdentifier("closeArchives")
+                Button("События, реплей и граф") {
+                    Task { await engine.flushJournal(); showingJournal = true }
+                }.accessibilityIdentifier("openTelemetry")
+                Button("Подводное бюро расследований") { showingBureau = true }
+                    .accessibilityIdentifier("openBureau")
+                Button("Вахтенный журнал") { showingCaptainJournal = true }
+                    .accessibilityIdentifier("openCaptainJournal")
+                Button("Чёрный ящик и заметки") {
+                    Task { await recorder.drain(); showingBlackBox = true }
+                }.accessibilityIdentifier("openBlackBox")
+                Button("Реплики экипажа") { showingCrewJournal = true }
+                    .accessibilityIdentifier("openCrewJournal")
+            }
+            .foregroundStyle(.primary)
+            .navigationTitle("Журналы экспедиции")
+        }
+        .fullScreenCover(isPresented: $showingJournal) { ExpeditionJournalView() }
+        .fullScreenCover(isPresented: $showingBureau) { BureauView(journal: .shared) }
+        .fullScreenCover(isPresented: $showingCaptainJournal) { CaptainJournalView(logger: engine.captainLogger) }
+        .fullScreenCover(isPresented: $showingBlackBox) { BlackBoxJournal() }
+        .fullScreenCover(isPresented: $showingCrewJournal) { journalPanel }
     }
 
     private func largeTextInstruments(insets: EdgeInsets) -> some View {
@@ -3939,6 +4036,7 @@ struct ContentView: View {
                 if engine.zone == .ocean {
                     Button("Карта экспедиции", action: openMap).accessibilityIdentifier("openMap")
                 }
+                voiceNoteControls
                 Button("Пауза", action: engine.pause).accessibilityIdentifier("pauseDive")
             }
             .buttonStyle(.bordered).controlSize(.large)
@@ -3950,7 +4048,6 @@ struct ContentView: View {
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
         VStack(spacing: 0) {
-            journalButton
             (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())) {
                 brand
                 Spacer()
@@ -3963,10 +4060,6 @@ struct ContentView: View {
                     .accessibilityLabel(A11yL10n.format("a11y.best.format", defaultValue: "Лучшая доставленная добыча: %lld", Int64(engine.bestScore)))
             }
             .padding(.top, max(insets.top, 48) + 12)
-            Button("Вахтенный журнал") { showingJournal = true }
-                .foregroundStyle(.white).frame(minHeight: 44)
-                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
-                .buttonStyle(.bordered)
             VStack(spacing: 12) {
                 Text("СВОБОДНЫЙ ОКЕАН")
                     .font(.system(.body, design: .monospaced).weight(.semibold))
@@ -4005,8 +4098,7 @@ struct ContentView: View {
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
-                bureauButton
-                crewJournalButton
+                journalButton
                 Button {
                     garageMessage = ""
                     showingGarage = true
@@ -4051,12 +4143,12 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Text("Подлодка на прокачку").font(.title.bold()).accessibilityAddTraits(.isHeader)
-                    Text("Баланс: \(engine.crystals) кристаллов").font(.headline)
+                    Text("Баланс: \(engine.crystals) кристаллов").font(.body)
                     Text("Собирай ромбовидные кристаллы в океане: каждая находка даёт 10. Они сохраняются сразу, даже при поражении. Стили покупаются навсегда и меняют только внешность.")
                     Text("Установлено: \(engine.selectedStyle.title). \(engine.selectedStyle.description)")
                     ForEach(SubmarineStyle.allCases) { style in
                         VStack(alignment: .leading, spacing: 10) {
-                            Text(style.title).font(.headline).accessibilityAddTraits(.isHeader)
+                            Text(style.title).font(.body).accessibilityAddTraits(.isHeader)
                             Text(style.description)
                             Text(engine.selectedStyle == style ? "Выбрано" : (engine.owns(style) ? "Куплено" : "Цена: \(style.price) кристаллов"))
                             if !engine.owns(style), engine.crystals < style.price {
@@ -4236,6 +4328,7 @@ struct ContentView: View {
     private func controls(insets: EdgeInsets) -> some View {
         VStack(spacing: 4) {
             Spacer()
+            voiceNoteControls
             if engine.energy < 25 {
                 Label("Мало энергии — ищи батарею или возвращайся", systemImage: "bolt.trianglebadge.exclamationmark")
                     .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.danger)
@@ -4397,49 +4490,37 @@ struct ContentView: View {
         Label(text, systemImage: icon).font(.system(.body)).foregroundStyle(color)
     }
 
-    private var bureauButton: some View {
-        Button { showingBureau = true } label: {
-            Label("Подводное бюро расследований", systemImage: "doc.text.magnifyingglass")
-                .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(OceanPalette.white)
-        .background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityIdentifier("openBureau")
-    }
-
-    private var crewJournalButton: some View {
-        Button { showingCrewJournal = true } label: {
-            Label("Журнал экспедиции", systemImage: "book.closed")
-                .frame(maxWidth: .infinity, minHeight: 44)
-        }.accessibilityIdentifier("openCrewJournal")
-    }
-
     private var journalPanel: some View {
         NavigationStack {
-            List {
-                Section {
-                    Text("Последние 500 записей текущего запуска приложения. Реплики за бортом — выдержки из этого журнала.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                if engine.crewJournal.entries.isEmpty {
-                    Text("Журнал пуст. Начните экспедицию.")
-                }
-                ForEach(engine.crewJournal.entries.reversed()) { entry in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Экспедиция \(entry.expedition) · \(Int(entry.seconds)) с · \(entry.level.rawValue)")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text(entry.message).font(.headline)
-                        if let phrase = entry.crewPhrase { Text(phrase).foregroundStyle(OceanPalette.teal) }
-                        Text(entry.snapshot).font(.footnote)
-                        Text(entry.date, style: .time).font(.caption2).foregroundStyle(.secondary)
-                    }.accessibilityElement(children: .combine)
-                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Button("Готово") { showingCrewJournal = false }.font(.body).frame(minHeight: 44)
+                    Section {
+                        Text("Последние 500 записей текущего запуска приложения. Реплики за бортом — выдержки из этого журнала.")
+                            .font(.body).foregroundStyle(.secondary)
+                    }
+                    if engine.crewJournal.entries.isEmpty {
+                        Text("Журнал пуст. Начните экспедицию.").font(.body)
+                    }
+                    ForEach(engine.crewJournal.entries.reversed().prefix(crewVisibleLimit)) { entry in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Экспедиция \(entry.expedition) · \(Int(entry.seconds)) с · \(entry.level.rawValue)")
+                                .font(.body).foregroundStyle(.secondary)
+                            Text(entry.message).font(.body)
+                            if let phrase = entry.crewPhrase { Text(phrase).foregroundStyle(OceanPalette.teal) }
+                            Text(entry.snapshot).font(.body)
+                            Text(entry.date, style: .time).font(.body).foregroundStyle(.secondary)
+                        }.accessibilityElement(children: .combine)
+                    }
+                    if crewVisibleLimit < engine.crewJournal.entries.count {
+                        Button("Ещё записи") { crewVisibleLimit += 50 }
+                    }
+                }.font(.body).padding(24)
             }
             .navigationTitle("Бортовой журнал")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { showingCrewJournal = false } } }
         }
     }
+
 
     private var resultPanel: some View {
         let paused = engine.state == .paused
@@ -4447,9 +4528,6 @@ struct ContentView: View {
         let title = paused ? "Можно выдохнуть." : (success ? "Груз доставлен." : "Океан сильнее.")
         let detail = paused ? "Экспедиция на паузе. Заряд сохраняется." : (success ? "Чёрный ящик на базе. Хорошая работа, капитан." : (engine.failureReason == .energy ? "Заряд закончился. Груз остался на глубине." : "Корпус не выдержал. Груз остался на глубине."))
         return VStack(spacing: 22) {
-            Button("Вахтенный журнал") { showingJournal = true }
-                .foregroundStyle(.white).frame(minHeight: 44)
-                .padding(.horizontal, 12).background(OceanPalette.ink, in: Capsule())
 
             Image(systemName: paused ? "pause.fill" : (success ? "shippingbox.fill" : "water.waves"))
                 .font(.system(.title).weight(.medium)).foregroundStyle(success ? OceanPalette.gold : OceanPalette.teal)
@@ -4481,15 +4559,16 @@ struct ContentView: View {
                            accessibilityTitle: A11yL10n.text("a11y.best.label", defaultValue: "Лучшая добыча"), highlighted: false)
             }
             .padding(.vertical, 16).background(OceanPalette.teal.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
-            if !paused, let diveID = engine.diveID {
-                LatestReceiptView(journal: .shared, diveID: diveID)
-            }
-            bureauButton
             VStack(spacing: 12) {
                 journalButton
                 if !paused {
-                    Button("Реплей") { Task { await engine.flushJournal(); showingReplay = true } }
-                        .accessibilityIdentifier("resultReplay")
+                    Button { Task { await engine.flushJournal(); showingReplay = true } } label: {
+                        Label("Реплей экспедиции", systemImage: "play.rectangle")
+                            .font(.body.weight(.semibold)).foregroundStyle(Color.white)
+                            .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).padding(8).background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityIdentifier("resultReplay")
                 }
                 Button {
                     if paused { engine.togglePause() } else { engine.startGame() }
@@ -4507,13 +4586,15 @@ struct ContentView: View {
                         .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.teal)
                         .accessibilityLabel(A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"))
                 }
-                journalButton
                 Button { showingMap = false; engine.returnToMenu() } label: {
                     Text("На поверхность").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 }
                     .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
                     .accessibilityIdentifier("returnToMenu")
                     .accessibilityLabel(A11yL10n.text("a11y.return.menu", defaultValue: "На поверхность"))
+            }
+            if !paused, let diveID = engine.diveID {
+                LatestReceiptView(journal: .shared, diveID: diveID)
             }
         }
         .padding(25).frame(maxWidth: 360)

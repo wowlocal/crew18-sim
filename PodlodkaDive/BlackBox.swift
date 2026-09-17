@@ -9,7 +9,7 @@ enum BlackBoxCategory: String, Codable, CaseIterable, Sendable { case state, con
 struct BlackBoxEntry: Codable, Identifiable, Sendable, Equatable {
     var id = UUID()
     let runID: UUID
-    let seq: Int
+    var seq: Int
     let t: TimeInterval
     let wallTime: Date
     var schemaVersion = 1
@@ -109,24 +109,37 @@ actor BlackBox {
     private var timer: Task<Void, Never>?
     private var writing = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
-    private var initialized = false
     private var recovered = false
-    private var recoveryTask: Task<Int, Never>?
+    private var recoveryTask: Task<Int, Error>?
+    private(set) var storageError: String?
+    private let storeFactory: @Sendable () throws -> BlackBoxStore
     private let now: @Sendable () -> Date
     private let sleep: @Sendable () async throws -> Void
     init(store: BlackBoxStore? = nil, now: @escaping @Sendable () -> Date = { Date() },
-         sleep: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(3)) }) {
-        self.store = store; self.now = now; self.sleep = sleep
+         sleep: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(3)) },
+         storeFactory: @escaping @Sendable () throws -> BlackBoxStore = {
+             BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self))
+         }) {
+        self.store = store; self.now = now; self.sleep = sleep; self.storeFactory = storeFactory
     }
-    func reader() -> BlackBoxReader? { prepare(); return store.map { BlackBoxReader(store: $0) } }
+    func reader() async -> BlackBoxReader? {
+        await recover()
+        return recovered ? store.map { BlackBoxReader(store: $0) } : nil
+    }
     private func prepare() {
-        guard !initialized else { return }; initialized = true
-        do { if store == nil { store = BlackBoxStore(modelContainer: try ModelContainer(for: BlackBoxRow.self)) } }
-        catch { output.error("Database unavailable: \(error.localizedDescription)") }
+        if store == nil {
+            do { store = try storeFactory() }
+            catch {
+                storageError = error.localizedDescription
+                output.error("Database unavailable: \(error.localizedDescription)")
+            }
+        }
+        guard timer == nil else { return }
         let sleep = self.sleep
         timer = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await sleep() } catch { return }
+                guard self != nil else { return }
                 await self?.flush()
             }
         }
@@ -134,16 +147,23 @@ actor BlackBox {
     func recover() async {
         guard !recovered else { return }
         prepare()
+        guard let store else { return }
         if recoveryTask == nil {
-            let store = self.store, output = self.output
-            recoveryTask = Task {
-                do { return try await store?.recoverAndPrune() ?? 0 }
-                catch { output.error("Recovery failed: \(error.localizedDescription)"); return 0 }
-            }
+            recoveryTask = Task { try await store.recoverAndPrune() }
         }
-        let restored = await recoveryTask?.value ?? 0
-        sequence = max(sequence, restored)
-        recovered = true
+        do {
+            let restored = try await recoveryTask?.value ?? 0
+            guard !recovered else { return }
+            // Events buffered before the disk became available follow the persisted sequence.
+            for index in buffer.indices { buffer[index].seq += restored }
+            sequence += restored
+            recovered = true
+            storageError = nil
+        } catch {
+            storageError = error.localizedDescription
+            recoveryTask = nil
+            output.error("Recovery failed: \(error.localizedDescription)")
+        }
     }
     func log(_ level: BlackBoxLevel = .info, _ category: BlackBoxCategory, _ message: String,
              attrs: [String: String] = [:], runID: UUID, t: TimeInterval) async {
@@ -158,6 +178,8 @@ actor BlackBox {
         if buffer.count >= 64 { await flush() }
     }
     func flush() async {
+        await recover()
+        guard recovered else { return }
         if writing {
             await withCheckedContinuation { waiters.append($0) }
             await flush(); return
@@ -168,7 +190,11 @@ actor BlackBox {
         do {
             try await store.write(batch)
             let ids = Set(batch.map(\.id)); buffer.removeAll { ids.contains($0.id) }
-        } catch { output.error("Flush failed: \(error.localizedDescription)") }
+            storageError = nil
+        } catch {
+            storageError = error.localizedDescription
+            output.error("Flush failed: \(error.localizedDescription)")
+        }
         writing = false
         let pending = waiters; waiters = []; pending.forEach { $0.resume() }
     }
@@ -183,36 +209,35 @@ actor BlackBox {
     private var started = ProcessInfo.processInfo.systemUptime
     private var active = false
     private var ticks = 0
-    private var pendingStartEvents: [String] = []
+    private weak var engine: GameEngine?
     private var screen = "launch"
     init(engine: GameEngine, logger: BlackBox = .shared) {
         self.logger = logger
+        self.engine = engine
         tail = Task { await logger.recover() }
         record(.system, "app.launch")
         if let error = engine.garageLoadError { record(.system, "garage.load.failed", level: .error, attrs: ["reason": error]) }
         subscription = engine.events.sink { [weak self, weak engine] event in
             guard let self, let engine else { return }
             switch event {
+            case .runStarted(let id):
+                let sessionID = runID
+                runID = id; active = true; ticks = 0
+                record(.state, "run.start", attrs: ["sessionID": sessionID.uuidString, "style": engine.selectedStyle.rawValue,
+                    "night": String(UserDefaults.standard.bool(forKey: "podlodkaDive.nightExpedition")), "best": String(engine.bestScore)])
+                snapshot(engine.situationSummary, boundary: true)
+            case .runEnded(let outcome):
+                guard active else { return }
+                snapshot(engine.situationSummary, boundary: true)
+                record(.state, "run.end", attrs: ["outcome": outcome, "score": String(engine.score), "best": String(engine.bestScore), "reason": String(describing: engine.failureReason)])
+                active = false; flush()
+                runID = UUID(); started = ProcessInfo.processInfo.systemUptime
             case .stateChanged(let state):
-                if state == .playing && !active {
-                    let sessionID = runID
-                    runID = UUID(); started = ProcessInfo.processInfo.systemUptime; active = true; ticks = 0
-                    record(.state, "run.start", attrs: ["sessionID": sessionID.uuidString, "style": engine.selectedStyle.rawValue,
-                        "night": String(UserDefaults.standard.bool(forKey: "podlodkaDive.nightExpedition")), "best": String(engine.bestScore)])
-                    snapshot(engine.situationSummary, boundary: true)
-                    for text in pendingStartEvents { record(.event, text) }; pendingStartEvents = []
-                }
                 record(.state, String(describing: state)); flow(String(describing: state))
-                if state == .completed || state == .gameOver || (state == .ready && active) {
-                    snapshot(engine.situationSummary, boundary: true)
-                    record(.state, "run.end", attrs: ["outcome": String(describing: state), "score": String(engine.score), "best": String(engine.bestScore), "reason": String(describing: engine.failureReason)])
-                    active = false; flush()
-                    runID = UUID(); started = ProcessInfo.processInfo.systemUptime
-                }
             case .situation(let summary): ticks += 1; if ticks % 4 == 0 { snapshot(summary) }
             case .danger(let text): record(.hazard, text, level: .warning); snapshot(engine.situationSummary, boundary: true)
             case .speak(let text):
-                if !active && engine.state != .playing { pendingStartEvents.append(text) } else { record(.event, text) }
+                record(.event, text)
             case .energyLow: record(.resource, "energyLow", level: .warning)
             case .objectiveChanged(let value): record(.event, "blackBox", attrs: ["collected": String(value)])
             case .success(let score): record(.event, "success", attrs: ["score": String(score)])
@@ -221,7 +246,7 @@ actor BlackBox {
             }
         }
     }
-    func timestamp() -> (UUID, Double) { (runID, ProcessInfo.processInfo.systemUptime - started) }
+    func timestamp() -> (UUID, Double) { (runID, active ? (engine?.runElapsed ?? 0) : ProcessInfo.processInfo.systemUptime - started) }
     func record(_ category: BlackBoxCategory, _ message: String, level: BlackBoxLevel = .info, attrs: [String: String] = [:], timestamp: (UUID, Double)? = nil) {
         let logger = self.logger
         let captured = timestamp ?? self.timestamp()

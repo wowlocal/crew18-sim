@@ -114,13 +114,14 @@ struct CaptainJournalView: View {
     @State private var entries: [CaptainLogger.Entry] = []
     @State private var storageError: String?
     @State private var query = ""
+    @State private var visibleLimit = 50
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 20) {
                 Text("Вахтенный журнал").font(.title).accessibilityAddTraits(.isHeader)
                 Button("Готово") { dismiss() }
-                Text("Степень трезвости").font(.headline)
+                Text("Степень трезвости").font(.body)
                 ForEach(CaptainLogger.Sobriety.allCases, id: \.self) { value in
                     Button {
                         sobriety = value
@@ -133,9 +134,9 @@ struct CaptainJournalView: View {
                 TextField("Поиск событий", text: $query).textFieldStyle(.roundedBorder)
                 Button("Обновить") { Task { await reload() } }
                 if let storageError { Text(storageError) }
-                Text("Последние записи · до 2000").font(.headline)
+                Text("Последние записи · до 2000").font(.body)
                 if entries.isEmpty { Text("Вахтенный журнал пока пуст.") }
-                ForEach(entries.filter { query.isEmpty || $0.message.localizedCaseInsensitiveContains(query) || $0.event.localizedCaseInsensitiveContains(query) }) { entry in
+                ForEach(entries.filter { query.isEmpty || $0.message.localizedCaseInsensitiveContains(query) || $0.event.localizedCaseInsensitiveContains(query) }.prefix(visibleLimit)) { entry in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(entry.date, format: .dateTime.day().month().hour().minute().second())
                         Text(entry.message)
@@ -148,7 +149,9 @@ struct CaptainJournalView: View {
                     .accessibilityElement(children: .combine)
                     Divider()
                 }
+                if visibleLimit < entries.count { Button("Ещё записи") { visibleLimit += 50 }.font(.body) }
             }
+            .font(.body)
             .padding(24)
             .buttonStyle(.bordered)
             .controlSize(.large)
@@ -159,6 +162,7 @@ struct CaptainJournalView: View {
         .preferredColorScheme(.light)
         .task { await reload() }
         .refreshable { await reload() }
+        .onChange(of: query) { _, _ in visibleLimit = 50 }
     }
 
     private func reload() async {

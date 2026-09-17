@@ -9,6 +9,7 @@ struct ExpeditionJournalView: View {
     var body: some View {
         NavigationStack {
             List {
+                Button("Закрыть") { dismiss() }.font(.body).frame(minHeight: 44)
                 NavigationLink("Граф всех игр") { ExpeditionFlowView(expeditionId: nil) }
                     .accessibilityIdentifier("allFlows")
                 if let error { Text(error).foregroundStyle(.red) }
@@ -21,14 +22,14 @@ struct ExpeditionJournalView: View {
                             Text(run.date, style: .date)
                             Text(run.date, style: .time)
                             Text("\(run.result) · \(Int(run.duration)) с · Груз: \(run.cargo)")
-                            if !run.reason.isEmpty { Text(run.reason).font(.caption) }
+                            if !run.reason.isEmpty { Text(run.reason).font(.body) }
                         }
                     }.accessibilityIdentifier("expeditionRow")
                 }
                 if hasMore { Button("Ещё экспедиции") { Task { await load() } } }
             }
+            .font(.body)
             .navigationTitle("Журнал экспедиций")
-            .toolbar { Button("Закрыть") { dismiss() } }
             .task { await ExpeditionLogger.shared.flush(); await load() }
         }
     }
@@ -60,13 +61,14 @@ struct ExpeditionDetailView: View {
                 DisclosureGroup("\(event.sequenceNumber) · \(String(format: "%.1f", event.time)) с · \(event.type)") {
                     Text("\(event.timestamp.formatted()) · v\(event.schemaVersion) · \(event.severity)")
                     ForEach(event.payload.keys.sorted(), id: \.self) { key in
-                        Text("\(key): \(event.payload[key] ?? "")").font(.caption.monospaced()).textSelection(.enabled)
+                        Text("\(key): \(event.payload[key] ?? "")").font(.body.monospaced()).textSelection(.enabled)
                     }
                 }
             }
             if hasMore { Button("Ещё события") { Task { await load() } } }
         }
-        .navigationTitle("События")
+        .font(.body)
+            .navigationTitle("События")
         .task(id: category) { events = []; hasMore = true; await load() }
     }
     private func load() async {
@@ -91,36 +93,39 @@ struct ExpeditionReplayView: View {
             VStack(spacing: 16) {
                 if loading { ProgressView("Чтение реплея…") }
                 if let error { Text(error).foregroundStyle(.red) }
-                ReplayMap(state: timeline.state(at: time)).frame(height: 330)
+                TelemetryReplayMap(state: timeline.state(at: time)).frame(height: 330)
                     .accessibilityLabel("Положение лодки на записи")
                 Text("\(time, specifier: "%.1f") / \(timeline.duration, specifier: "%.1f") с")
                     .monospacedDigit().accessibilityIdentifier("replayTime")
                 Button(playing ? "Пауза" : "Воспроизвести") {
                     if time >= timeline.duration { time = 0 }
                     playing.toggle()
-                }.accessibilityIdentifier("replayPlay").disabled(timeline.duration <= 0)
+                }.frame(minHeight: 44).accessibilityIdentifier("replayPlay").disabled(timeline.duration <= 0)
                 Slider(value: $time, in: 0...max(0.001, timeline.duration)) { _ in playing = false }
                     .accessibilityLabel("Время реплея").accessibilityIdentifier("replayTimeline")
                 GeometryReader { geometry in
                     ForEach(timeline.highlights) { event in
-                        Button { playing = false; time = event.time } label: { Image(systemName: "bookmark.fill") }
+                        Button { playing = false; time = event.time } label: { Image(systemName: "bookmark.fill").frame(width: 44, height: 44).contentShape(Rectangle()) }
                             .accessibilityLabel("\(event.type), \(Int(event.time)) секунд")
-                            .position(x: 12 + (geometry.size.width - 24) * event.time / max(1, timeline.duration), y: 12)
+                            .position(x: 22 + (geometry.size.width - 44) * event.time / max(1, timeline.duration), y: 22)
                     }
-                }.frame(height: 30)
+                }.frame(height: 44)
                 ForEach(timeline.highlights) { event in
-                    Button("\(event.type) · \(Int(event.time)) с") { playing = false; time = event.time }
+                    Button { playing = false; time = event.time } label: {
+                        Text("\(event.type) · \(Int(event.time)) с").frame(minHeight: 44).contentShape(Rectangle())
+                    }
                         .accessibilityIdentifier("replayHighlight")
                 }
                 let state = timeline.state(at: time)
                 Text("Энергия: \(state["energy"] ?? "—") · Корпус: \(state["hull"] ?? "—")")
                 Text("Груз: \(state["cargo"] ?? "—") · Цель: \(state["target"] ?? "—")")
                 ForEach(timeline.events.filter { $0.type != "snapshot" && $0.time <= time && $0.time >= time - 3 }.suffix(5)) { event in
-                    Text(event.type).font(.caption)
+                    Text(event.type).font(.body)
                 }
             }.padding()
         }
-        .navigationTitle("Реплей")
+        .font(.body)
+            .navigationTitle("Реплей")
         .task {
             do {
                 let reader = LogReader()
@@ -147,7 +152,7 @@ struct ExpeditionReplayView: View {
     }
 }
 
-private struct ReplayMap: View {
+private struct TelemetryReplayMap: View {
     let state: [String: String]
     var body: some View {
         Canvas { context, size in
@@ -190,38 +195,40 @@ struct ExpeditionFlowView: View {
         ScrollView {
             VStack {
                 Text(expeditionId == nil ? "Все экспедиции" : "Эта экспедиция")
-                Canvas { context, size in
-                    let nodes = Array(Set(edges.flatMap { [$0.from, $0.to] })).sorted()
-                    func point(_ name: String) -> CGPoint {
-                        let index = nodes.firstIndex(of: name) ?? 0
-                        let angle = Double(index) / Double(max(1, nodes.count)) * 2 * .pi - .pi / 2
-                        return CGPoint(x: size.width / 2 + cos(angle) * size.width * 0.35, y: size.height / 2 + sin(angle) * size.height * 0.35)
-                    }
-                    for edge in edges {
-                        let a = point(edge.from), b = point(edge.to)
-                        let angle = atan2(b.y - a.y, b.x - a.x)
-                        let end = CGPoint(x: b.x - cos(angle) * 30, y: b.y - sin(angle) * 30)
-                        var path = Path(); path.move(to: a); path.addLine(to: end)
-                        path.move(to: CGPoint(x: end.x - cos(angle - 0.5) * 10, y: end.y - sin(angle - 0.5) * 10))
-                        path.addLine(to: end)
-                        path.addLine(to: CGPoint(x: end.x - cos(angle + 0.5) * 10, y: end.y - sin(angle + 0.5) * 10))
-                        context.stroke(path, with: .color(.cyan), lineWidth: 2)
-                        context.draw(Text("\(edge.count)").font(.caption).foregroundStyle(.orange), at: CGPoint(x: a.x * 0.4 + b.x * 0.6, y: a.y * 0.4 + b.y * 0.6 - 10))
-                    }
-                    for node in nodes {
-                        context.draw(Text(node).font(.caption.bold()).foregroundStyle(.white), at: point(node))
-                    }
-                }.frame(height: 330).accessibilityHidden(true)
                 if edges.isEmpty { Text("Переходов пока нет") }
-                ForEach(edges) { edge in Text("\(edge.from) → \(edge.to): \(edge.count)") }
+                FlowGraphRows(edges: edges)
                 if let error { Text(error).foregroundStyle(.red) }
             }.padding()
         }
-        .navigationTitle("Граф переходов")
+        .font(.body)
+            .navigationTitle("Граф переходов")
         .accessibilityIdentifier("flowGraph")
         .task {
             do { edges = try await LogReader().transitions(expeditionId: expeditionId) }
             catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+
+struct FlowGraphRows: View {
+    let edges: [FlowEdge]
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    var body: some View {
+        VStack(spacing: 16) {
+            ForEach(edges) { edge in
+                (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout()) : AnyLayout(HStackLayout())) {
+                    Text(edge.from).fixedSize(horizontal: false, vertical: true)
+                    Image(systemName: dynamicTypeSize.isAccessibilitySize ? "arrow.down" : "arrow.right")
+                    Text(edge.to).fixedSize(horizontal: false, vertical: true)
+                    Text("×\(edge.count)").monospacedDigit()
+                }
+                .font(.body).foregroundStyle(.primary).padding(12)
+                .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(edge.from) → \(edge.to): \(edge.count)")
+            }
         }
     }
 }

@@ -5,14 +5,26 @@ final class AccessibilityAuditTests: XCTestCase {
     func testCaptainJournalCanBeReadAndConfigured() throws {
         let app = XCUIApplication()
         app.launch()
-        app.buttons["Вахтенный журнал"].tap()
+        app.buttons["openJournal"].tap()
+        app.buttons["openCaptainJournal"].tap()
         XCTAssertTrue(app.staticTexts["Вахтенный журнал"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Обновить"].exists)
         app.buttons["Совсем пьян"].tap()
         XCTAssertTrue(app.buttons["Совсем пьян"].isSelected)
         app.buttons["Трезв как стекло"].tap()
-        try app.performAccessibilityAudit()
+        try app.performAccessibilityAudit { issue in
+            print("Archive audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
         app.buttons["Готово"].tap()
+        app.buttons["openCrewJournal"].tap()
+        XCTAssertTrue(app.navigationBars["Бортовой журнал"].waitForExistence(timeout: 5))
+        try app.performAccessibilityAudit { issue in
+            print("Crew audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
+        app.buttons["Готово"].tap()
+        app.buttons["closeArchives"].tap()
         XCTAssertTrue(app.buttons["startDive"].exists)
     }
 
@@ -44,22 +56,31 @@ final class AccessibilityAuditTests: XCTestCase {
     }
 
     @MainActor
-    func testReceiptAndArchivedCaseSurviveRelaunch() {
+    func testReceiptAndArchivedCaseSurviveRelaunch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-accessibilityAuditState", "completed"]
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["diveReceipt"].waitForExistence(timeout: 5))
+        for _ in 0..<4 where !app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "ЧЕК · ")).firstMatch.exists { app.swipeUp() }
+        let expectedReceipt = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "ЧЕК · ")).firstMatch.label
         app.terminate()
         app.launchArguments = []
         app.launch()
+        app.buttons["openJournal"].tap()
         let bureau = app.buttons["openBureau"]
         XCTAssertTrue(bureau.waitForExistence(timeout: 5))
         for _ in 0..<4 where !bureau.isHittable { app.swipeUp() }
         bureau.tap()
         let archivedCase = app.buttons["diveCase"].firstMatch
         XCTAssertTrue(archivedCase.waitForExistence(timeout: 5))
+        try app.performAccessibilityAudit { issue in
+            print("Archive audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
         archivedCase.tap()
         XCTAssertTrue(app.descendants(matching: .any)["diveReceipt"].waitForExistence(timeout: 5))
+        for _ in 0..<4 where !app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "ЧЕК · ")).firstMatch.exists { app.swipeUp() }
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "ЧЕК · ")).firstMatch.label, expectedReceipt)
         XCTAssertTrue(app.staticTexts["Чёрный ящик доставлен. Добыча: 750"].firstMatch.exists)
     }
 
@@ -89,28 +110,42 @@ final class AccessibilityAuditTests: XCTestCase {
 
 final class ExpeditionJournalUITests: XCTestCase {
     @MainActor
-    func testJournalReplaySeekAndGraphs() {
+    func testJournalReplaySeekAndGraphs() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-accessibilityAuditState", "journal"]
         app.launch()
         XCTAssertTrue(app.buttons["openJournal"].waitForExistence(timeout: 10))
         app.buttons["openJournal"].tap()
+        app.buttons["openTelemetry"].tap()
         XCTAssertTrue(app.buttons["expeditionRow"].firstMatch.waitForExistence(timeout: 10))
+        try app.performAccessibilityAudit { issue in
+            print("Archive audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
         app.buttons["expeditionRow"].firstMatch.tap()
         app.buttons["replay"].tap()
         XCTAssertTrue(app.sliders["replayTimeline"].waitForExistence(timeout: 10))
+        let initialTime = app.staticTexts["replayTime"].label
         app.sliders["replayTimeline"].adjust(toNormalizedSliderPosition: 0.5)
-        XCTAssertTrue(app.staticTexts["replayTime"].exists)
+        XCTAssertNotEqual(app.staticTexts["replayTime"].label, initialTime)
+        try app.performAccessibilityAudit { issue in
+            print("Archive audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
         XCTAssertTrue(app.buttons["replayHighlight"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["replayHighlight"].firstMatch.tap()
         app.buttons["replayPlay"].tap()
         XCTAssertTrue(app.buttons["Пауза"].exists)
         app.buttons["replayPlay"].tap()
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["BackButton"].firstMatch.tap()
         app.buttons["runFlow"].tap()
-        XCTAssertTrue(app.staticTexts["Welcome → Game: 1"].waitForExistence(timeout: 5))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.descendants(matching: .any)["Welcome → Game: 1"].waitForExistence(timeout: 5))
+        try app.performAccessibilityAudit { issue in
+            print("Archive audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
+        app.buttons["BackButton"].firstMatch.tap()
+        app.buttons["BackButton"].firstMatch.tap()
         app.buttons["allFlows"].tap()
         XCTAssertTrue(app.staticTexts["Все экспедиции"].waitForExistence(timeout: 5))
     }
@@ -120,10 +155,11 @@ extension AccessibilityAuditTests {
     @MainActor
     func testJournalReplayAndFlowAccessibility() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-accessibilityAuditState", "completed"]
+        app.launchArguments = ["-accessibilityAuditState", "journal"]
         app.launch()
         XCTAssertTrue(app.buttons["openJournal"].waitForExistence(timeout: 5))
         app.buttons["openJournal"].tap()
+        app.buttons["openBlackBox"].tap()
         XCTAssertTrue(app.buttons["journalRun"].firstMatch.waitForExistence(timeout: 5))
         try app.performAccessibilityAudit { issue in
             print("Journal audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
@@ -131,9 +167,18 @@ extension AccessibilityAuditTests {
         }
         app.buttons["journalRun"].firstMatch.tap()
         XCTAssertTrue(app.sliders["replaySeek"].waitForExistence(timeout: 5))
+        let initialTime = app.staticTexts["replayTime"].label
         app.sliders["replaySeek"].adjust(toNormalizedSliderPosition: 0.5)
+        XCTAssertNotEqual(app.staticTexts["replayTime"].label, initialTime)
         try app.performAccessibilityAudit { issue in
             print("Journal audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
+        app.buttons["BackButton"].firstMatch.tap()
+        app.buttons["blackBoxFlow"].tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "→ playing")).firstMatch.waitForExistence(timeout: 5))
+        try app.performAccessibilityAudit { issue in
+            print("Archive audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
             return false
         }
     }

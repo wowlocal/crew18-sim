@@ -20,7 +20,7 @@ final class ExpeditionLogTests: XCTestCase, @unchecked Sendable {
     func testConcurrentStressBatchFlushAndPagination() async throws {
         let file = path()
         // Independent DB used below so the read connection can observe committed boundaries.
-        let writer = ExpeditionLogger(path: file)
+        let writer = ExpeditionLogger(path: file, sleep: { throw CancellationError() })
         let start = Date()
         await withTaskGroup(of: Void.self) { group in
             for index in 0..<5000 {
@@ -48,9 +48,13 @@ final class ExpeditionLogTests: XCTestCase, @unchecked Sendable {
         let file = path()
         let logger = ExpeditionLogger(path: file)
         await logger.log(expeditionId: "timed", type: "start")
-        try await Task.sleep(for: .milliseconds(2300))
         let reader = LogReader(path: file)
-        let first = try await reader.events(expeditionId: "timed")
+        var first: [ExpeditionEvent] = []
+        for _ in 0..<400 {
+            first = (try? await reader.events(expeditionId: "timed")) ?? []
+            if !first.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
         XCTAssertEqual(first.count, 1)
         await logger.log(expeditionId: "timed", type: "end", payload: ["result": "completed", "cargo": "100", "time": "10"])
         let summaries = try await reader.expeditions()
@@ -105,8 +109,10 @@ final class ExpeditionLogTests: XCTestCase, @unchecked Sendable {
         for index in 0..<60 {
             try store.batch([.init(expeditionId: "\(index)", sequenceNumber: 1, timestamp: Date(timeIntervalSince1970: Double(index)), schemaVersion: 1, category: "Gameplay", type: "end", severity: "info", payload: ["result": "completed"])])
         }
-        try store.batch([event(1, "start")]); try store.prune()
-        XCTAssertEqual(try store.rows("SELECT count(*) FROM expeditions")[0][0], "50")
+        try store.batch([.init(expeditionId: "test", sequenceNumber: 1, timestamp: Date(timeIntervalSince1970: -1), schemaVersion: 1, category: "State", type: "start", severity: "info", payload: [:])])
+        try store.prune()
+        XCTAssertEqual(try store.rows("SELECT count(*) FROM expeditions")[0][0], "51")
+        XCTAssertEqual(Set(try store.rows("SELECT id FROM expeditions WHERE result!='active'").map { $0[0] }), Set((10..<60).map(String.init)))
         XCTAssertEqual(try store.rows("SELECT result FROM expeditions WHERE id='test'")[0][0], "active")
     }
 
@@ -125,6 +131,7 @@ final class ExpeditionLogTests: XCTestCase, @unchecked Sendable {
         try Data("blocked".utf8).write(to: folder)
         let file = folder.appendingPathComponent("log.sqlite").path
         let logger = ExpeditionLogger(path: file)
+        for _ in 0..<600 { await logger.state(expeditionId: "noise", payload: [:]) }
         for type in ["start", "navigation", "damage", "blackBox", "docking", "error", "end"] {
             await logger.log(expeditionId: "retry", type: type)
         }

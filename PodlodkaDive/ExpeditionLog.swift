@@ -90,7 +90,7 @@ final class LogStore {
     }
     /// Keep at most 50 finished runs and 32 MB of event payloads. Active runs are protected.
     func prune() throws {
-        try execute("DELETE FROM expeditions WHERE result!='active' AND id NOT IN (SELECT id FROM expeditions ORDER BY date DESC LIMIT 50)")
+        try execute("DELETE FROM expeditions WHERE result!='active' AND id NOT IN (SELECT id FROM expeditions WHERE result!='active' ORDER BY date DESC LIMIT 50)")
         while let size = try rows("SELECT COALESCE(SUM(length(json)),0) FROM events").first?.first,
               (Int(size) ?? 0) > 32 * 1024 * 1024 {
             let old = try rows("SELECT id FROM expeditions WHERE result!='active' ORDER BY date LIMIT 1")
@@ -111,7 +111,12 @@ actor ExpeditionLogger {
     private(set) var lastError: String?
     private(set) var droppedSnapshots = 0
     private(set) var batchCount = 0
-    init(path: String = LogStore.defaultPath) { self.path = path }
+    private let sleep: @Sendable () async throws -> Void
+    init(path: String = LogStore.defaultPath,
+         sleep: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(2)) }) {
+        self.path = path
+        self.sleep = sleep
+    }
     func log(expeditionId: String, type: String, category: String = "Gameplay", severity: String = "info", payload: [String: String] = [:]) {
         if type == "snapshot", pending.count >= 512 { droppedSnapshots += 1; return }
         let sequence = (sequences[expeditionId] ?? 0) + 1
@@ -119,8 +124,9 @@ actor ExpeditionLogger {
         pending.append(.init(expeditionId: expeditionId, sequenceNumber: sequence, timestamp: Date(), schemaVersion: 1, category: category, type: type, severity: severity, payload: payload))
         if pending.count >= 64 || type == "end" { flush() }
         if timer == nil {
+            let sleep = self.sleep
             timer = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(2))
+                do { try await sleep() } catch { return }
                 guard !Task.isCancelled else { return }
                 await self?.timedFlush()
             }
@@ -132,8 +138,9 @@ actor ExpeditionLogger {
         timer = nil
         flush()
         if !pending.isEmpty {
+            let sleep = self.sleep
             timer = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(2))
+                do { try await sleep() } catch { return }
                 guard !Task.isCancelled else { return }
                 await self?.timedFlush()
             }
@@ -155,7 +162,12 @@ actor ExpeditionLogger {
 actor LogReader {
     private let path: String
     private var store: LogStore?
-    init(path: String = LogStore.defaultPath) { self.path = path }
+    private let sleep: @Sendable () async throws -> Void
+    init(path: String = LogStore.defaultPath,
+         sleep: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(2)) }) {
+        self.path = path
+        self.sleep = sleep
+    }
     private func database() throws -> LogStore {
         if let store { return store }
         let opened = try LogStore(path: path); store = opened; return opened

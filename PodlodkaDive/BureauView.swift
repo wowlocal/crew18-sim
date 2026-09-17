@@ -11,6 +11,7 @@ struct BureauView: View {
     var body: some View {
         NavigationStack {
             List {
+                Button("Готово") { dismiss() }.font(.body).frame(minHeight: 44)
                 Section {
                     Text("Подводное бюро расследований").font(.title2.bold())
                     Text("Каждое погружение — отдельное дело. Чек расскажет, куда ушла батарейка и почему помят корпус.")
@@ -24,15 +25,15 @@ struct BureauView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(receipt.date, style: .date) + Text(" · ") + Text(receipt.date, style: .time)
                             Text(receipt.outcome)
-                            Text("Дело №\(receipt.id.uuidString.prefix(8))").font(.caption.monospaced())
+                            Text("Дело №\(receipt.id.uuidString.prefix(8))").font(.body.monospaced())
                         }
                     }.accessibilityIdentifier("diveCase")
                 }
                 if loading { ProgressView("Открываем дела…") }
                 if hasMore && !loading && error == nil { Button("Ещё дела") { Task { await load() } } }
             }
+            .font(.body)
             .navigationTitle("Бюро расследований")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }
             .task { if receipts.isEmpty { await load() } }
         }
     }
@@ -54,7 +55,7 @@ struct ReceiptPaper: View {
     let receipt: DiveReceipt
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("ПОДВОДНОЕ БЮРО РАССЛЕДОВАНИЙ").font(.headline)
+            Text("ПОДВОДНОЕ БЮРО РАССЛЕДОВАНИЙ").font(.body)
             Text("ЧЕК · \(receipt.id.uuidString.prefix(8))")
             Text(receipt.date.formatted(date: .abbreviated, time: .standard))
             Divider()
@@ -111,9 +112,9 @@ private struct DiveCaseView: View {
             Section("Хронология · события и приборы") {
                 ForEach(entries) { entry in
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(String(format: "+%.1f с · %@", entry.elapsed, entry.severity)).font(.caption.monospaced())
+                        Text(String(format: "+%.1f с · %@", entry.elapsed, entry.severity)).font(.body.monospaced())
                         Text(entry.message).bold()
-                        Text(entry.kind).font(.caption.monospaced())
+                        Text(entry.kind).font(.body.monospaced())
                         Text(String(format: "Энергия %.1f · корпус %d/3 · груз %d", entry.boat.energy, entry.boat.hull, entry.boat.cargo))
                         Text(String(format: "Координаты %.0f, %.0f · скорость %.1f", entry.boat.x, entry.boat.y, entry.boat.speed))
                         Text("\(entry.boat.zone) · \(entry.boat.state) · щит: \(entry.boat.shield ? "да" : "нет") · ящик: \(entry.boat.blackBox ? "да" : "нет")")
@@ -124,7 +125,8 @@ private struct DiveCaseView: View {
                 if hasMore && !loading && error == nil { Button("Ещё события") { Task { await load() } } }
             }
         }
-        .navigationTitle("Дело №\(diveID.uuidString.prefix(8))")
+        .font(.body)
+            .navigationTitle("Дело №\(diveID.uuidString.prefix(8))")
         .task { if entries.isEmpty { await load() } }
     }
     @MainActor private func load() async {
