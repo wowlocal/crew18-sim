@@ -5,6 +5,7 @@ final class AccessibilityAuditTests: XCTestCase {
     func testCaptainJournalCanBeReadAndConfigured() throws {
         let app = XCUIApplication()
         app.launch()
+        if app.buttons["surfaceMenu"].exists { app.buttons["surfaceMenu"].tap() }
         app.buttons["openJournal"].tap()
         app.buttons["openCaptainJournal"].tap()
         XCTAssertTrue(app.staticTexts["Вахтенный журнал"].waitForExistence(timeout: 5))
@@ -66,6 +67,7 @@ final class AccessibilityAuditTests: XCTestCase {
         app.terminate()
         app.launchArguments = []
         app.launch()
+        if app.buttons["surfaceMenu"].exists { app.buttons["surfaceMenu"].tap() }
         app.buttons["openJournal"].tap()
         let bureau = app.buttons["openBureau"]
         XCTAssertTrue(bureau.waitForExistence(timeout: 5))
@@ -85,15 +87,36 @@ final class AccessibilityAuditTests: XCTestCase {
     }
 
     @MainActor
-    func testMenuGameMapPauseAndGarageNavigation() {
+    func testMenuGameMapPauseAndGarageNavigation() throws {
         // given
         let app = XCUIApplication()
         app.launch()
         XCTAssertTrue(app.buttons["startDive"].waitForExistence(timeout: 5))
 
-        // when / then
+        // when / then: starting and changing the mission require no scrolling.
+        XCTAssertTrue(app.buttons["startDive"].isHittable)
+        XCTAssertTrue(app.buttons["openCampaign"].isHittable)
+        XCTAssertFalse(app.buttons["openJournal"].exists)
+        let welcome = XCTAttachment(screenshot: app.screenshot())
+        welcome.name = "Compact welcome"
+        welcome.lifetime = .keepAlways
+        add(welcome)
+        app.buttons["openHelp"].tap()
+        XCTAssertTrue(app.navigationBars["Как играть"].waitForExistence(timeout: 5))
+        try app.performAccessibilityAudit()
+        app.buttons["Готово"].tap()
         app.buttons["startDive"].tap()
         XCTAssertTrue(app.buttons["pauseDive"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["captainNote"].exists)
+        let steering = app.descendants(matching: .any)["steeringPad"].firstMatch
+        let sonar = app.buttons["sonar"]
+        XCTAssertFalse(steering.frame.intersects(sonar.frame), "Controls must not overlap")
+        XCTAssertGreaterThan(steering.frame.minY - app.buttons["pauseDive"].frame.maxY,
+                             app.frame.height * 0.3, "Keep the center of the ocean clear")
+        let game = XCTAttachment(screenshot: app.screenshot())
+        game.name = "Compact game"
+        game.lifetime = .keepAlways
+        add(game)
         app.buttons["openMap"].tap()
         XCTAssertTrue(app.buttons["closeMap"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["sonar"].exists)
@@ -105,6 +128,12 @@ final class AccessibilityAuditTests: XCTestCase {
         XCTAssertTrue(app.buttons["confirmAbandon"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["confirmAbandon"].firstMatch.tap()
         XCTAssertTrue(app.buttons["startDive"].waitForExistence(timeout: 5))
+        app.buttons["surfaceMenu"].tap()
+        app.buttons["openSettings"].tap()
+        XCTAssertTrue(app.navigationBars["Настройки"].waitForExistence(timeout: 5))
+        try app.performAccessibilityAudit()
+        app.buttons["Готово"].tap()
+        app.buttons["surfaceMenu"].tap()
         app.buttons["openGarage"].tap()
         XCTAssertTrue(app.navigationBars["Гараж"].waitForExistence(timeout: 5))
     }
@@ -117,6 +146,7 @@ final class ExpeditionJournalUITests: XCTestCase {
         app.launchArguments = ["-accessibilityAuditState", "journal"]
         app.launch()
         XCTAssertTrue(app.buttons["openJournal"].waitForExistence(timeout: 10))
+        if app.buttons["surfaceMenu"].exists { app.buttons["surfaceMenu"].tap() }
         app.buttons["openJournal"].tap()
         app.buttons["openTelemetry"].tap()
         XCTAssertTrue(app.buttons["expeditionRow"].firstMatch.waitForExistence(timeout: 10))
@@ -160,6 +190,7 @@ extension AccessibilityAuditTests {
         app.launchArguments = ["-accessibilityAuditState", "journal"]
         app.launch()
         XCTAssertTrue(app.buttons["openJournal"].waitForExistence(timeout: 5))
+        if app.buttons["surfaceMenu"].exists { app.buttons["surfaceMenu"].tap() }
         app.buttons["openJournal"].tap()
         app.buttons["openBlackBox"].tap()
         XCTAssertTrue(app.buttons["journalRun"].firstMatch.waitForExistence(timeout: 5))
@@ -213,7 +244,7 @@ extension AccessibilityAuditTests {
         app.terminate()
         app.launchArguments = []
         app.launch()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Оборудование уже на борту")).firstMatch.exists)
+        XCTAssertTrue(app.buttons["openCampaign"].label.contains("Подводный экспресс"))
         try app.performAccessibilityAudit()
         let start = app.buttons["startDive"]
         for _ in 0..<6 where !start.isHittable { app.swipeUp() }
@@ -251,7 +282,7 @@ extension AccessibilityAuditTests {
                 app.buttons["resumeDive"].tap()
                 XCTAssertTrue(app.buttons["sonar"].exists)
                 let specificStatus = state == "station" ? "Оборудование на борту" : "Проверено 0 из 3 сигналов"
-                XCTAssertTrue(app.staticTexts[specificStatus].exists, "Fixture must show the requested mission, not Aster")
+                XCTAssertTrue((app.descendants(matching: .any)["missionObjective"].firstMatch.value as? String)?.contains(specificStatus) == true, "The compact objective must retain the requested mission status for VoiceOver")
                 try app.performAccessibilityAudit { issue in
                     print("Campaign HUD \(state): \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
                     return false

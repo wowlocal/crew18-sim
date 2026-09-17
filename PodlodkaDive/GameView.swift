@@ -15,6 +15,8 @@ struct GameView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
     @State private var showingCampaign = false
+    @State private var showingSettings = false
+    @State private var showingHelp = false
     @State private var confirmingAbandon = false
     @State private var showingMap = false
     @State private var showingCrewJournal = false
@@ -57,7 +59,6 @@ struct GameView: View {
                             largeTextInstruments(insets: proxy.safeAreaInsets)
                         } else {
                             instruments(insets: proxy.safeAreaInsets)
-                            objectivePointer(size: proxy.size)
                             controls(insets: proxy.safeAreaInsets)
                         }
                     }
@@ -85,7 +86,7 @@ struct GameView: View {
                     engine.prepareAccessibilityAuditState(arguments[marker + 1])
                 }
 #endif
-                engine.startLoop()
+                if engine.state != .ready { engine.startLoop() }
             }
             .onDisappear { engine.stopLoop() }
             .onChange(of: proxy.size) { _, size in engine.resize(to: size) }
@@ -137,6 +138,8 @@ struct GameView: View {
             engine.navigate(to: visible ? "Campaign" : "Welcome", reason: visible ? "openCampaign" : "closeCampaign")
             recorder.flow(visible ? "campaign" : "ready")
         }
+        .sheet(isPresented: $showingSettings) { settingsPanel }
+        .sheet(isPresented: $showingHelp) { helpPanel }
         .fullScreenCover(isPresented: $showingCampaign) { CampaignView(engine: engine) }
         .alert("Прервать рейс?", isPresented: $confirmingAbandon) {
             Button("Прервать рейс", role: .destructive) { showingMap = false; engine.returnToMenu() }
@@ -158,7 +161,10 @@ struct GameView: View {
         .onChange(of: showingMap) { _, value in recorder.flow(value ? "map" : String(describing: engine.state)) }
         .onChange(of: showingGarage) { _, value in recorder.flow(value ? "garage" : "ready") }
         .onChange(of: showingBlackBox) { _, value in recorder.flow(value ? "journal" : String(describing: engine.state)) }
-        .onChange(of: engine.state) { _, state in if state != .playing { captain.finish(recorder: recorder) } }
+        .onChange(of: engine.state) { _, state in
+            if state == .ready { engine.stopLoop() } else { engine.startLoop() }
+            if state != .playing { captain.finish(recorder: recorder) }
+        }
 
     }
 
@@ -176,7 +182,7 @@ struct GameView: View {
             if captain.recording { Text(captain.text).font(.body).lineLimit(3) }
             if let error = captain.error { Text(error).font(.body) }
             Button { Task { await captain.toggle(recorder: recorder) } } label: {
-                Label(captain.recording ? "journal.voice.stop" : "journal.voice.start",
+                Label(captain.recording ? "Закончить заметку" : "Заметка капитана",
                       systemImage: captain.recording ? "stop.circle" : "mic")
             }
             .disabled(captain.busy).buttonStyle(.bordered).controlSize(.large)
@@ -254,104 +260,110 @@ struct GameView: View {
     }
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
-        VStack(spacing: 0) {
-            (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())) {
-                brand
+        VStack(spacing: 24) {
+            HStack {
+                Text("PODLODKA / 18")
+                    .font(.system(.headline, design: .monospaced)).foregroundStyle(.white)
                 Spacer()
-                Label("\(engine.bestScore)", systemImage: "trophy")
-                    .font(.system(.body, design: .monospaced).weight(.semibold))
-                    .foregroundStyle(OceanPalette.gold)
-                    .padding(.horizontal, 13).padding(.vertical, 10)
-                    .background(OceanPalette.gold.opacity(0.08), in: Capsule())
-                    .overlay(Capsule().stroke(OceanPalette.gold.opacity(0.15), lineWidth: 1))
-                    .accessibilityLabel(A11yL10n.format("a11y.best.format", defaultValue: "Лучшая доставленная добыча: %lld", Int64(engine.bestScore)))
-            }
-            .padding(.top, max(insets.top, 48) + 12)
-            VStack(spacing: 12) {
-                Text("СВОБОДНЫЙ ОКЕАН")
-                    .font(.system(.body, design: .monospaced).weight(.semibold))
-                    .tracking(0).foregroundStyle(OceanPalette.teal)
-                Text("Курс на глубину.")
-                    .font(.system(.largeTitle, design: .rounded).weight(.bold))
-                    .tracking(-1.5).foregroundStyle(OceanPalette.white)
-
-                Text(engine.mission?.briefing ?? "Найди чёрный ящик и вернись.")
-                    .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
-                    .multilineTextAlignment(.center)
-                    .background(OceanPalette.ink)
-            }
-            .padding(.top, size.height * 0.045)
-            .frame(minHeight: 44)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(A11yL10n.text("a11y.welcome.title", defaultValue: "Podlodka Dive. Курс на глубину."))
-            .accessibilityValue(engine.mission?.briefing ?? "Найди чёрный ящик и вернись с добычей.")
-            .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: 0)
-            VStack(spacing: size.height < 720 ? 16 : 22) {
-                HStack(spacing: 7) {
-                    Circle().fill(OceanPalette.teal).frame(width: 4, height: 4)
-                    Text(engine.mission.map { "ЭКСПЕДИЦИЯ \($0.number) / \($0.title)" } ?? "ЭКСПЕДИЦИЯ / ASTER").fixedSize(horizontal: false, vertical: true)
-                        .font(.system(.body, design: .monospaced).weight(.semibold)).tracking(0)
-                }.foregroundStyle(OceanPalette.teal).background(OceanPalette.ink)
-                HStack(spacing: 0) {
-                    instruction(icon: "arrow.up.and.down.and.arrow.left.and.right", title: "Свободный курс", detail: "Тяни стик в любую сторону")
-                    Rectangle().fill(OceanPalette.teal.opacity(0.15)).frame(width: 1, height: 48)
-                    instruction(icon: "flashlight.on.fill", title: "Свет и сонар", detail: "Усиливай фары. Ищи путь.")
+                Menu {
+                    Button("Гараж", systemImage: "wrench.and.screwdriver") {
+                        garageMessage = ""
+                        showingGarage = true
+                    }.accessibilityIdentifier("openGarage")
+                    Button("Журналы экспедиции", systemImage: "books.vertical") {
+                        showingArchives = true
+                    }.accessibilityIdentifier("openJournal")
+                    Button("Настройки", systemImage: "slider.horizontal.3") {
+                        showingSettings = true
+                    }.accessibilityIdentifier("openSettings")
+                } label: {
+                    Image(systemName: "ellipsis").font(.title2)
+                        .frame(width: 44, height: 44).background(OceanPalette.ink, in: Circle())
                 }
-                .frame(minHeight: 44).contentShape(Rectangle())
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(A11yL10n.text("a11y.welcome.controls", defaultValue: "Управление: свободный курс, сонар и форсаж."))
-                .accessibilityHint(A11yL10n.text("a11y.welcome.controls.hint", defaultValue: "В экспедиции выбирай курс действиями VoiceOver на руле."))
-                .padding(.vertical, 17)
-                .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
-                .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
+                .foregroundStyle(.white).accessibilityLabel("Меню")
+                .accessibilityIdentifier("surfaceMenu")
+            }
+            Text("Курс на глубину")
+                .font(.system(.largeTitle, design: .rounded).bold())
+                .foregroundStyle(.white).accessibilityAddTraits(.isHeader)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: size.height * 0.22)
+            VStack(alignment: .leading, spacing: 12) {
+                Button { showingCampaign = true } label: {
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Экспедиция \(engine.mission?.number ?? 1) из 3")
+                                .font(.subheadline).foregroundStyle(OceanPalette.teal)
+                            Text(engine.mission?.title ?? "Затонувший «Астер»")
+                                .font(.title2.bold()).foregroundStyle(.white)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").foregroundStyle(.white)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                    .padding(18).background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 20))
+                }
+                .buttonStyle(.plain).disabled(!engine.isCampaign)
+                .accessibilityIdentifier("openCampaign")
+                .accessibilityHint("Выбрать другую экспедицию и прочитать задание")
                 Button {
                     showingMap = false
                     engine.startGame()
                 } label: {
-                    HStack { Spacer(); Text("Начать экспедицию"); Spacer(); Image(systemName: "arrow.right") }
+                    HStack { Spacer(); Text("Начать"); Spacer(); Image(systemName: "arrow.right") }
                 }
-                .buttonStyle(DiveButtonStyle())
-                .accessibilityLabel(A11yL10n.text("a11y.start", defaultValue: "Начать экспедицию"))
-                .accessibilityHint(A11yL10n.text("a11y.start.hint", defaultValue: "Запускает экспедицию и открывает приборы управления."))
+                .buttonStyle(DiveButtonStyle()).accessibilityLabel("Начать экспедицию")
                 .accessibilityIdentifier("startDive").accessibilityFocused($focusedControl, equals: "startDive")
-                if engine.isCampaign {
-                    Button { showingCampaign = true } label: {
-                        Label("Выбор экспедиции", systemImage: "map")
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .buttonStyle(.plain).foregroundStyle(.white).accessibilityIdentifier("openCampaign")
-                    Text(engine.mission?.hint ?? "").font(.body).foregroundStyle(.white).background(OceanPalette.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                journalButton
-                Button {
-                    garageMessage = ""
-                    showingGarage = true
-                } label: {
-                    Label("Гараж · \(engine.crystals) кристаллов", systemImage: "wrench.and.screwdriver")
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .accessibilityHint("Кастомизация подлодки перед экспедицией")
-                .accessibilityIdentifier("openGarage")
-                .buttonStyle(.plain).foregroundStyle(OceanPalette.white)
-                if voiceOverEnabled {
-                    Toggle("Пошаговое управление VoiceOver", isOn: $voiceOverButtons)
-                        .tint(OceanPalette.teal)
-                }
-                Toggle(isOn: $nightExpedition) {
-                    Text(String(localized: "night.toggle", defaultValue: "Ночная экспедиция"))
-                }
-                .tint(OceanPalette.teal)
-                .accessibilityHint(A11yL10n.text("night.hint", defaultValue: "Затемняет океан и выключает фонарь. Управление не меняется."))
-                Text("Береги корпус и заряд на обратный путь").fixedSize(horizontal: false, vertical: true)
-                    .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
+                Button("Как играть") { showingHelp = true }
+                    .font(.body).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 44).accessibilityIdentifier("openHelp")
             }
-            .padding(.bottom, max(insets.bottom, 24) + 16)
         }
-        .padding(.horizontal, 26)
-        .background(OceanPalette.ink.opacity(0.7))
-        .accessibilityElement(children: .contain)
+        .padding(.horizontal, 24)
+        .padding(.top, max(insets.top, 48) + 12)
+        .padding(.bottom, max(insets.bottom, 20) + 12)
+        .frame(minHeight: size.height)
+        .background(LinearGradient(colors: [OceanPalette.ink, .clear, OceanPalette.ink],
+                                   startPoint: .top, endPoint: .bottom))
+    }
+
+    private var settingsPanel: some View {
+        NavigationStack {
+            Form {
+                Toggle("Ночная экспедиция", isOn: $nightExpedition)
+                    .accessibilityHint("Затемняет океан и выключает фонарь. Управление не меняется.")
+                Toggle("Пошаговое управление VoiceOver", isOn: $voiceOverButtons)
+            }
+            .navigationTitle("Настройки")
+            .toolbar {
+                Button { showingSettings = false } label: {
+                    Image(systemName: "xmark").frame(width: 44, height: 44)
+                }.accessibilityLabel("Готово")
+            }
+        }
+    }
+
+    private var helpPanel: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    Text(engine.mission?.briefing ?? "Найди чёрный ящик и вернись на базу.")
+                    Text(engine.mission?.hint ?? "Сохрани заряд на возвращение.")
+                    Text("Управление").font(.title2.bold()).accessibilityAddTraits(.isHeader)
+                    Text("Тяни стик в нужную сторону. Отпусти, чтобы остановить тягу. Течение продолжит нести лодку.")
+                    Text("Сонар бесплатно обнаруживает находки. Форсаж расходует 7 энергии, усиление фар — 5.")
+                    Text("Карта ставит игру на паузу. В меню паузы доступны журналы, заметка капитана и курс на базу.")
+                    Text("С VoiceOver используй действия на руле. Пошаговое управление включается в настройках.")
+                }.font(.body).foregroundStyle(.white).padding(24)
+            }
+            .background(OceanPalette.ink).navigationTitle("Как играть")
+            .toolbar {
+                Button { showingHelp = false } label: {
+                    Image(systemName: "xmark").frame(width: 44, height: 44)
+                }.accessibilityLabel("Готово")
+            }
+        }
     }
 
     private var garagePanel: some View {
@@ -407,66 +419,37 @@ struct GameView: View {
         if UIAccessibility.isVoiceOverRunning { UIAccessibility.post(notification: .announcement, argument: garageMessage) }
     }
 
-    private var brand: some View {
-        HStack(spacing: 9) {
-            Text("18").font(.system(.body, design: .monospaced).weight(.bold))
-                .foregroundStyle(OceanPalette.teal).frame(minWidth: 44, minHeight: 44)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(OceanPalette.teal.opacity(0.3), lineWidth: 1))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("PODLODKA").fixedSize(horizontal: false, vertical: true).font(.system(.body).weight(.bold)).tracking(0).foregroundStyle(OceanPalette.white)
-                Text("DIVE / iOS CREW").fixedSize(horizontal: false, vertical: true).font(.system(.body, design: .monospaced).weight(.semibold)).foregroundStyle(OceanPalette.white)
-            }
-        }
-    }
-
-    private func instruction(icon: String, title: String, detail: String) -> some View {
-        VStack(spacing: 7) {
-            Image(systemName: icon).font(.system(.title3).weight(.medium)).foregroundStyle(OceanPalette.gold)
-            Text(title).font(.system(.body).weight(.semibold)).fixedSize(horizontal: false, vertical: true).foregroundStyle(OceanPalette.white)
-            Text(detail).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white).fixedSize(horizontal: false, vertical: true).background(OceanPalette.ink)
-
-        }.frame(maxWidth: .infinity)
-    }
-
     private func instruments(insets: EdgeInsets) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 0) {
             HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(engine.zone == .bossCave ? "БОНУСНЫЙ УРОВЕНЬ · ПЕЩЕРА" : "ЭКСПЕДИЦИЯ 01 · \(engine.depth) М")
-                        .font(.system(.body, design: .monospaced).weight(.semibold))
-                        .tracking(0).foregroundStyle(OceanPalette.white).background(OceanPalette.ink)
-                    Text(engine.objectiveText)
-                        .font(.system(.body, design: .rounded).weight(.semibold))
-                        .foregroundStyle(engine.objectiveReady ? OceanPalette.teal : OceanPalette.white)
-                    if engine.mission != nil {
-                        Text(engine.missionStatus).font(.body).foregroundStyle(.white)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(engine.zone == .bossCave ? "Спрут" : engine.targetLabel)
+                        .font(.headline).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 6) {
+                        Image(systemName: "location.north.fill")
+                            .rotationEffect(.radians(atan2(engine.target.y - engine.position.y,
+                                                          engine.target.x - engine.position.x) + .pi / 2))
+                        Text(engine.zone == .bossCave
+                             ? "\(Int(ceil(engine.bossTimeRemaining))) с"
+                             : "\(engine.targetDistance) м")
+                    }.font(.subheadline.monospacedDigit()).foregroundStyle(OceanPalette.gold)
                 }
-                .allowsHitTesting(false)
-                .frame(minHeight: 44).contentShape(Rectangle())
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(A11yL10n.text("a11y.objective.label", defaultValue: "Цель экспедиции"))
-                .accessibilityValue(engine.objectiveText)
-                .accessibilitySortPriority(8)
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .accessibilityElement(children: .ignore).accessibilityIdentifier("missionObjective")
+                .accessibilityLabel(engine.objectiveText)
+                .accessibilityValue("\(engine.missionStatus). \(engine.targetDistance) метров, на \(engine.targetClockHour) часов")
                 hudButton("ear", label: "Озвучить обстановку", id: "speakSurroundings", action: announcer.describeSurroundings)
                 if engine.zone == .ocean {
-                    hudButton("map", label: A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"), id: "openMap", action: openMap)
+                    hudButton("map", label: "Карта экспедиции", id: "openMap", action: openMap)
                 }
-                hudButton("pause.fill", label: A11yL10n.text("a11y.pause", defaultValue: "Пауза"), id: "pauseDive", action: engine.pause)
+                hudButton("pause.fill", label: "Пауза", id: "pauseDive", action: engine.pause)
             }
             HStack(spacing: 13) {
                 HStack(spacing: 6) {
                     Image(systemName: "bolt.fill").font(.system(.body))
                     Text("\(Int(ceil(engine.energy)))%")
                         .font(.system(.body, design: .monospaced).weight(.semibold)).frame(minWidth: 35, alignment: .leading)
-                    Capsule().fill(OceanPalette.teal.opacity(0.14)).frame(width: 40, height: 4)
-                        .overlay(alignment: .leading) {
-                            Capsule().fill(engine.energy < 25 ? OceanPalette.danger : OceanPalette.teal)
-                                .frame(width: 40 * engine.energy / 100, height: 4)
-                        }
+
                 }
                 .foregroundStyle(engine.energy < 25 ? OceanPalette.danger : OceanPalette.teal)
                 .frame(minHeight: 44).contentShape(Rectangle())
@@ -499,34 +482,11 @@ struct GameView: View {
                     .accessibilitySortPriority(5)
             }
             .allowsHitTesting(false)
-            HStack(spacing: 6) {
-                Image(systemName: "location.north.fill")
-                    .rotationEffect(.radians(atan2(engine.target.y - engine.position.y, engine.target.x - engine.position.x) + .pi / 2))
-                Text(engine.zone == .bossCave
-                     ? "СПРУТ · \(Int(ceil(engine.bossTimeRemaining))) С"
-                     : "\(engine.targetLabel) · \(engine.targetDistance) М")
-                    .tracking(0)
-                Spacer()
-                if engine.zone == .ocean, engine.objectiveReady {
-                    Image(systemName: "checkmark.circle").foregroundStyle(OceanPalette.teal)
-                }
-            }
-            .font(.system(.body, design: .monospaced).weight(.semibold))
-            .foregroundStyle(OceanPalette.gold).allowsHitTesting(false)
-            .frame(minHeight: 44)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(A11yL10n.text("a11y.target.course", defaultValue: "Курс на цель"))
-            .accessibilityValue("\(engine.targetLabel): \(engine.targetDistance) метров, на \(engine.targetClockHour) часов. \(engine.missionStatus)")
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
-            .accessibilitySortPriority(4)
-            Spacer()
         }
-        .padding(.horizontal, 22).padding(.top, max(insets.top, 48) + 9)
-        .background(alignment: .top) {
-            LinearGradient(colors: [OceanPalette.ink.opacity(0.92), OceanPalette.ink.opacity(0.7), .clear], startPoint: .top, endPoint: .bottom)
-                .frame(height: 190).allowsHitTesting(false)
-        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 22))
+        .padding(.horizontal, 16).padding(.top, max(insets.top, 48) + 8)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func hudButton(_ icon: String, label: String, id: String, action: @escaping () -> Void) -> some View {
@@ -545,77 +505,53 @@ struct GameView: View {
     }
 
     private func controls(insets: EdgeInsets) -> some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 12) {
             Spacer()
-            voiceNoteControls
-            if engine.energy < 25 {
-                Label("Мало энергии — ищи батарею или возвращайся", systemImage: "bolt.trianglebadge.exclamationmark")
-                    .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.danger)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(OceanPalette.ink.opacity(0.85), in: Capsule()).allowsHitTesting(false)
+            if engine.noticeRemaining > 0 && engine.notice != engine.objectiveText {
+                Text(engine.notice).font(.subheadline.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(.white).multilineTextAlignment(.center)
+                    .padding(12).frame(maxWidth: 320)
+                    .background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 16))
+                    .padding(.horizontal, 20).allowsHitTesting(false)
+                    .accessibilityLabel(engine.notice)
             }
-            if engine.noticeRemaining > 0 {
-                Text(engine.notice).font(.system(.body).weight(.semibold))
-                    .foregroundStyle(OceanPalette.white).multilineTextAlignment(.center)
-                    .padding(.horizontal, 15).padding(.vertical, 9)
-                    .background(OceanPalette.ink.opacity(0.85), in: Capsule())
-                    .padding(.horizontal, 16).allowsHitTesting(false)
-                    .accessibilityAddTraits(.updatesFrequently)
-            }
-            HStack(alignment: .center, spacing: 0) {
+            HStack(alignment: .bottom, spacing: 8) {
                 if voiceOverEnabled && voiceOverButtons {
                     VoiceOverSteeringControls(onMove: engine.moveForVoiceOver)
                         .accessibilityFocused($focusedControl, equals: "steeringPad")
-                        .frame(width: 174, height: 170)
+                        .frame(width: 154, height: 154)
                 } else {
-                SteeringPad(onInput: engine.setSteering, steering: engine.steering,
-                            contacts: engine.sonarContacts, onSummary: { announcer.describeSurroundings() })
-                    .accessibilityFocused($focusedControl, equals: "steeringPad")
-                    .frame(width: 174, height: 170)
-                    .accessibilitySortPriority(3)
+                    SteeringPad(onInput: engine.setSteering, steering: engine.steering,
+                                contacts: engine.sonarContacts, onSummary: announcer.describeSurroundings)
+                        .accessibilityFocused($focusedControl, equals: "steeringPad")
+                        .frame(width: 154, height: 154).accessibilitySortPriority(3)
                 }
                 Spacer(minLength: 0)
-                VStack(spacing: 7) {
-                    LightBoostButton(
-                        detail: engine.isLightBoostActive
-                            ? "Ещё \(Int(ceil(engine.lightBoostRemaining))) с"
-                            : (engine.lightBoostCooldown > 0 ? "Заряд \(Int(ceil(engine.lightBoostCooldown))) с" : "−5 энергии"),
-                        progress: 1 - engine.lightBoostCooldown / GameEngine.lightBoostRecharge,
-                        active: engine.isLightBoostActive,
-                        enabled: engine.canLightBoost,
-                        action: engine.activateLightBoost
-                    )
-                    .accessibilityIdentifier("lightBoost")
+                VStack(spacing: 8) {
+                    AbilityButton(icon: engine.isLightBoostActive ? "flashlight.on.fill" : "flashlight.off.fill",
+                                  title: "Фары", progress: 1 - engine.lightBoostCooldown / GameEngine.lightBoostRecharge,
+                                  enabled: engine.canLightBoost, color: OceanPalette.gold,
+                                  accessibilityLabel: "Усилить свет фар",
+                                  accessibilityValue: abilityValue(cooldown: engine.lightBoostCooldown),
+                                  accessibilityHint: "Усиливает свет на четыре секунды и расходует 5 энергии.",
+                                  action: engine.activateLightBoost).accessibilityIdentifier("lightBoost")
                     HStack(spacing: 12) {
-                        AbilityButton(icon: "dot.radiowaves.left.and.right", title: "СОНАР",
-                                      detail: engine.sonarCooldown > 0 ? "\(Int(ceil(engine.sonarCooldown))) с" : "Поиск",
+                        AbilityButton(icon: "dot.radiowaves.left.and.right", title: "Сонар",
                                       progress: 1 - engine.sonarCooldown / 8, enabled: engine.canSonar,
-                                      color: OceanPalette.teal,
-                                      accessibilityLabel: A11yL10n.text("a11y.sonar", defaultValue: "Сонар"),
+                                      color: OceanPalette.teal, accessibilityLabel: "Сонар",
                                       accessibilityValue: abilityValue(cooldown: engine.sonarCooldown),
-                                      accessibilityHint: A11yL10n.text("a11y.sonar.hint", defaultValue: "Обнаруживает находки поблизости и добавляет их в контакты."),
-                                      action: engine.activateSonar)
-                            .accessibilityIdentifier("sonar")
-                        AbilityButton(icon: "bolt.fill", title: "ФОРСАЖ",
-                                      detail: engine.boostCooldown > 0 ? "\(Int(ceil(engine.boostCooldown))) с" : "−7 энергии",
+                                      accessibilityHint: "Бесплатно обнаруживает находки поблизости.",
+                                      action: engine.activateSonar).accessibilityIdentifier("sonar")
+                        AbilityButton(icon: "bolt.fill", title: "Форсаж",
                                       progress: 1 - engine.boostCooldown / 4.5, enabled: engine.canBoost,
-                                      color: OceanPalette.gold,
-                                      accessibilityLabel: A11yL10n.text("a11y.boost", defaultValue: "Форсаж"),
+                                      color: OceanPalette.gold, accessibilityLabel: "Форсаж",
                                       accessibilityValue: abilityValue(cooldown: engine.boostCooldown),
-                                      accessibilityHint: A11yL10n.text("a11y.boost.hint", defaultValue: "Даёт рывок по выбранному курсу и расходует 7 энергии."),
-                                      action: engine.activateBoost)
-                            .accessibilityIdentifier("boost")
-                    }
-                    if engine.runElapsed < 12 {
-                        Text("Отпусти стик, чтобы зависнуть")
-                            .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
-                            .allowsHitTesting(false)
+                                      accessibilityHint: "Рывок по выбранному курсу. Расходует 7 энергии.",
+                                      action: engine.activateBoost).accessibilityIdentifier("boost")
                     }
                 }
-                .padding(.trailing, 18)
             }
-            .padding(.bottom, max(insets.bottom, 20))
-            .background(LinearGradient(colors: [.clear, OceanPalette.ink.opacity(0.82)], startPoint: .top, endPoint: .bottom).allowsHitTesting(false))
+            .padding(.horizontal, 16).padding(.bottom, max(insets.bottom, 20))
         }
     }
 
@@ -630,27 +566,6 @@ struct GameView: View {
             return A11yL10n.format("a11y.hull.shield.format", defaultValue: "%lld из 3. Щит активен", Int64(engine.hull))
         }
         return A11yL10n.format("a11y.hull.format", defaultValue: "%lld из 3", Int64(engine.hull))
-    }
-
-    private func objectivePointer(size: CGSize) -> some View {
-        let point = engine.screenPoint(engine.target)
-        let scale = size.width / engine.viewport.width
-        let bounds = CGRect(x: 29, y: 192, width: engine.viewport.width - 58, height: max(80, engine.viewport.height - 415))
-        let x = min(max(point.x, bounds.minX), bounds.maxX)
-        let y = min(max(point.y, bounds.minY), bounds.maxY)
-        return Group {
-            if !bounds.contains(point) {
-                Image(systemName: "location.north.fill")
-                    .font(.system(.callout).weight(.medium))
-                    .rotationEffect(.radians(atan2(engine.target.y - engine.position.y, engine.target.x - engine.position.x) + .pi / 2))
-                    .foregroundStyle(engine.objectiveReady ? OceanPalette.teal : OceanPalette.gold)
-                    .frame(width: 44, height: 44)
-                    .background(OceanPalette.ink.opacity(0.7), in: Circle())
-                    .overlay(Circle().stroke(OceanPalette.gold.opacity(0.25), lineWidth: 1))
-                    .position(x: x * scale, y: y * scale)
-                    .accessibilityHidden(true)
-            }
-        }.allowsHitTesting(false).accessibilityHidden(true)
     }
 
     private func mapPanel(height: CGFloat) -> some View {
@@ -781,6 +696,10 @@ struct GameView: View {
             .padding(.vertical, 16).background(OceanPalette.teal.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
             VStack(spacing: 12) {
                 journalButton
+                if paused {
+                    voiceNoteControls
+                    Button("Как играть") { showingHelp = true }.frame(minHeight: 44)
+                }
                 if !paused {
                     Button { Task { await engine.flushJournal(); showingReplay = true } } label: {
                         Label("Реплей экспедиции", systemImage: "play.rectangle")
@@ -1125,7 +1044,6 @@ final class SteeringSurface: UIView {
 private struct AbilityButton: View {
     let icon: String
     let title: String
-    let detail: String
     let progress: Double
     let enabled: Bool
     let color: Color
@@ -1144,53 +1062,14 @@ private struct AbilityButton: View {
                         .rotationEffect(.degrees(-90))
                     Image(systemName: icon).font(.system(.title3).weight(.medium)).foregroundStyle(color.opacity(enabled ? 1 : 0.4))
                 }.frame(width: 55, height: 55)
-                Text(title).font(.system(.body, design: .monospaced).weight(.semibold)).fixedSize(horizontal: false, vertical: true).tracking(0).foregroundStyle(color)
-                Text(detail).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white).fixedSize(horizontal: false, vertical: true).background(OceanPalette.ink)
+                Text(title).font(.caption.weight(.semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 3).background(OceanPalette.ink)
             }.frame(minWidth: 64)
         }.buttonStyle(.plain).disabled(!enabled)
             .accessibilityLabel(accessibilityLabel)
             .accessibilityValue(accessibilityValue)
             .accessibilityHint(accessibilityHint)
             .accessibilitySortPriority(2)
-    }
-}
-
-private struct LightBoostButton: View {
-    let detail: String
-    let progress: Double
-    let active: Bool
-    let enabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: active ? "flashlight.on.fill" : "flashlight.off.fill")
-                    .font(.system(.body).weight(.semibold))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(active ? "СВЕТ" : "ФАРЫ")
-                        .font(.system(.body, design: .monospaced).weight(.bold))
-                    Text(detail).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
-                }
-                Spacer(minLength: 2)
-                Circle()
-                    .trim(from: 0, to: min(1, max(0, progress)))
-                    .stroke(OceanPalette.gold.opacity(enabled || active ? 0.9 : 0.35),
-                            style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .frame(width: 14, height: 14)
-            }
-            .foregroundStyle(OceanPalette.gold.opacity(enabled || active ? 1 : 0.45))
-            .padding(.horizontal, 10)
-            .frame(width: 140).frame(minHeight: 48).padding(.vertical, 4)
-            .background(OceanPalette.ink.opacity(0.88), in: Capsule())
-            .overlay(Capsule().stroke(OceanPalette.gold.opacity(active ? 0.65 : 0.2), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled && !active)
-        .accessibilityLabel("Усилить свет фар")
-        .accessibilityValue(active ? "Активно, \(detail)" : detail)
-        .accessibilityHint("Удваивает дальность и ширину света на четыре секунды")
     }
 }
 
@@ -1251,9 +1130,9 @@ struct LiveExpeditionMap: View {
 
 private struct DiveButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(.body).weight(.bold)).foregroundStyle(OceanPalette.ink)
+        configuration.label.font(.system(.body).weight(.bold)).foregroundStyle(Color.black)
             .padding(.horizontal, 20).padding(.vertical, 16).frame(minHeight: 56)
-            .background(LinearGradient(colors: [Color(red: 1, green: 0.83, blue: 0.46), OceanPalette.gold], startPoint: .top, endPoint: .bottom), in: RoundedRectangle(cornerRadius: 18))
+            .background(OceanPalette.gold, in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.15), lineWidth: 1))
             .shadow(color: OceanPalette.gold.opacity(0.1), radius: 16, y: 4)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)

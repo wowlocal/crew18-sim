@@ -34,13 +34,13 @@ struct GameCanvas: View {
                 drawLowVisibility(in: &context, size: size)
             }
             drawSubmarine(in: &context, size: size)
-            if engine.state == .playing, let leak = engine.journalLeak {
+            if engine.state == .playing, engine.noticeRemaining <= 0, let leak = engine.journalLeak {
                 let age = engine.runElapsed - leak.startedAt
                 let boat = engine.screenPoint(engine.position)
                 let drift = reduceMotion ? 0 : age * 9
                 let width = min(260.0, size.width - 24)
                 let x = min(size.width - width / 2 - 12, max(width / 2 + 12, boat.x + leak.side * 24))
-                let y = max(30, boat.y - 65 - drift)
+                let y = min(size.height - 220, max(210, boat.y + 75 - drift))
                 context.drawLayer { bubble in
                     bubble.opacity = reduceMotion ? 1 : min(1, max(0, (3.5 - age) / 0.7))
                     let rect = CGRect(x: x - width / 2, y: y - 26, width: width, height: 52)
