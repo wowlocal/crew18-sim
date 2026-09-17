@@ -33,7 +33,7 @@ protocol ReminderClient {
 }
 
 final class LocalReminderClient: ReminderClient {
-    static let identifiers = ["expedition.return.1", "expedition.return.7"]
+    static let identifiers = ["expedition.return.hour", "expedition.return.1", "expedition.return.7"]
     let center = UNUserNotificationCenter.current()
     func authorize() async throws -> Bool {
         try await center.requestAuthorization(options: [.alert, .sound, .badge])
@@ -46,23 +46,6 @@ final class LocalReminderClient: ReminderClient {
     func cancel() {
         center.removePendingNotificationRequests(withIdentifiers: Self.identifiers)
         center.removeDeliveredNotifications(withIdentifiers: Self.identifiers)
-    }
-}
-
-struct ReminderPlan {
-    static func requests(id: UUID, eventID: UUID, now: Date, calendar: Calendar) -> [UNNotificationRequest] {
-        [1, 7].compactMap { days in
-            guard let date = calendar.date(byAdding: .day, value: days, to: now) else { return nil }
-            let content = UNMutableNotificationContent()
-            content.title = "Экспедиция ждёт капитана"
-            content.body = "Продолжите сохранённое погружение. Игра откроется на паузе."
-            content.sound = .default
-            content.userInfo = ["url": ReturnRoute(id: id).url.absoluteString, "eventID": eventID.uuidString]
-            // Floating calendar components preserve local wall time after time-zone changes.
-            let components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
-            return UNNotificationRequest(identifier: "expedition.return.\(days)", content: content,
-                trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
-        }
     }
 }
 
@@ -85,6 +68,9 @@ final class ReturnInbox: ObservableObject {
 final class ReturnNotificationDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        let actions = [UNNotificationAction(identifier: "CONTINUE", title: String(localized: "shortcut.continue"), options: .foreground),
+                       UNNotificationAction(identifier: "LATER", title: String(localized: "reminder.later"), options: .foreground)]
+        UNUserNotificationCenter.current().setNotificationCategories([UNNotificationCategory(identifier: "EXPEDITION_RETURN", actions: actions, intentIdentifiers: [], options: [])])
         return true
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
@@ -92,7 +78,12 @@ final class ReturnNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
         let info = response.notification.request.content.userInfo
         if let raw = info["url"] as? String, let url = URL(string: raw) {
             let eventID = (info["eventID"] as? String).flatMap(UUID.init(uuidString:))
-            Task { @MainActor in ReturnInbox.shared.receive(url, eventID: eventID) }
+            let action = response.actionIdentifier
+            Task { @MainActor in
+                if let route = NotificationRoute.resolve(url: url, action: action) {
+                    NavigationCoordinator.shared.receive(route, eventID: eventID)
+                }
+            }
         }
         completionHandler()
     }
@@ -108,6 +99,8 @@ final class ExpeditionRecovery: ObservableObject {
     @Published private(set) var history: [ReturnEvent] = []
     @Published var message: String?
     @Published var replacement: ReturnRoute?
+    @Published var briefing: ExpeditionSnapshot?
+    var currentDate: Date { now() }
     private weak var engine: GameEngine?
     private let directory: URL
     private let client: any ReminderClient
@@ -122,10 +115,10 @@ final class ExpeditionRecovery: ObservableObject {
     private var eventsURL: URL { directory.appendingPathComponent("events.json") }
 
     init(engine: GameEngine, directory: URL? = nil, client: any ReminderClient = LocalReminderClient(),
-         now: @escaping () -> Date = Date.init, calendar: @escaping () -> Calendar = { .current }) {
+         now: @escaping () -> Date = Date.init, dateProvider: (any DateProvider)? = nil, calendar: @escaping () -> Calendar = { .current }) {
         self.engine = engine
         self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("ExpeditionReturn")
-        self.client = client; self.now = now; self.calendar = calendar
+        self.client = client; self.now = dateProvider.map { provider in { provider.now() } } ?? now; self.calendar = calendar
         do {
             try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: eventsURL.path) {
@@ -152,7 +145,9 @@ final class ExpeditionRecovery: ObservableObject {
         guard validNumbers(try JSONSerialization.jsonObject(with: data)) else { throw RecoveryError.corrupt }
         struct Header: Decodable { let version: Int }
         guard try JSONDecoder().decode(Header.self, from: data).version == 1 else { throw RecoveryError.version }
-        let save = try JSONDecoder().decode(ExpeditionSnapshot.self, from: data)
+        var save = try JSONDecoder().decode(ExpeditionSnapshot.self, from: data)
+        guard save.schemaVersion == nil || save.schemaVersion == 2 else { throw RecoveryError.version }
+        save.schemaVersion = 2 // Version 1 had no schemaVersion or savedAt; optional fields migrate safely.
         guard !history.contains(where: { $0.expedition == save.id && ["completed", "gameOver", "saveDeleted"].contains($0.kind) }) else { throw RecoveryError.corrupt }
         guard save.hull > 0, save.hull <= 3, save.energy > 0, save.energy <= 100,
               save.level.size.width > 0, save.level.size.height > 0,
@@ -168,11 +163,12 @@ final class ExpeditionRecovery: ObservableObject {
         guard let engine, engine.state == .playing || engine.state == .paused else { return true }
         if exiting && exited { return true }
         do {
-            let snapshot = engine.snapshot()
+            var snapshot = engine.snapshot()
+            snapshot.savedAt = now()
             try JSONEncoder().encode(snapshot).write(to: saveURL, options: .atomic)
             savedID = snapshot.id
             record("save", title: "Экспедиция сохранена", text: "Положение, груз и состояние океана сохранены.")
-            if exiting { exited = true; schedule(id: snapshot.id) }
+            if exiting { exited = true; resumedID = nil; schedule(id: snapshot.id) }
             return true
         } catch { message = "Не удалось сохранить экспедицию. Повторите попытку."; return false }
     }
@@ -183,6 +179,7 @@ final class ExpeditionRecovery: ObservableObject {
         history.insert(ReturnEvent(id: id, expedition: run, date: now(), kind: kind, title: title, text: text, sourceEventID: sourceEventID), at: 0)
         engine?.captainLogger.record(kind, message: title, expedition: run ?? id, sobriety: .sober,
                                      details: ["domainEventID": id.uuidString])
+        Task { await BlackBox.shared.log(.info, .event, title, attrs: ["kind": kind, "domainEventID": id.uuidString], runID: run ?? id, t: 0, eventID: id) }
         persistHistory()
     }
     private func persistHistory() {
@@ -199,7 +196,12 @@ final class ExpeditionRecovery: ObservableObject {
     }
     func canOpen(_ event: ReturnEvent) -> Bool { event.expedition != nil && event.expedition == savedID }
 
-    private func schedule(id: UUID) {
+    func snooze(_ id: UUID) {
+        guard savedID == id else { failure(); return }
+        schedule(id: id, snoozed: true)
+    }
+    private func schedule(id: UUID, snoozed: Bool = false) {
+        guard let snapshot = try? load(), snapshot.id == id else { return }
         generation = UUID()
         remindersPending = true
         let token = generation, date = now(), cal = calendar(), eventID = UUID()
@@ -214,9 +216,9 @@ final class ExpeditionRecovery: ObservableObject {
                     return
                 }
                 guard self.generation == token else { return }
-                try await self.client.replace(ReminderPlan.requests(id: id, eventID: eventID, now: date, calendar: cal))
+                try await self.client.replace(ReminderPlanner.requests(save: snapshot, eventID: eventID, now: date, calendar: cal, snoozed: snoozed))
                 guard self.generation == token else { self.client.cancel(); return }
-                self.record("pushScheduled", title: "Напоминания включены", text: "Завтра и через неделю в это же местное время.", id: eventID, expedition: id)
+                self.record("pushScheduled", title: "Напоминания включены", text: String(localized: "reminder.scheduled"), id: eventID, expedition: id)
             } catch {
                 guard self.generation == token else { return }
                 self.remindersPending = false
@@ -232,6 +234,11 @@ final class ExpeditionRecovery: ObservableObject {
             record("pushCancelled", title: "Напоминания отменены", text: "Оставшиеся напоминания этой экспедиции отменены.", expedition: id)
         }
         remindersPending = false
+    }
+    func finishBriefing(restart: Bool) {
+        guard briefing != nil else { return }
+        briefing = nil
+        if restart { deleteSave(); engine?.startGame() } else if engine?.state == .paused { engine?.togglePause() }
     }
     func settle() async { await operations?.value }
     func deleteSave() {
@@ -259,11 +266,11 @@ final class ExpeditionRecovery: ObservableObject {
             guard snapshot.id == route.id else { failure(); return }
             let active = engine.state == .playing || engine.state == .paused
             if active && engine.expeditionId == route.id.uuidString {
-                if resumedID != route.id { engine.pause(); cancelReminders(); resumedID = route.id }
+                if resumedID != route.id { engine.pause(); cancelReminders(); resumedID = route.id; briefing = snapshot }
                 return
             }
             if active && !confirmed { replacement = route; return }
-            engine.restore(snapshot); resumedID = route.id; exited = false
+            engine.restore(snapshot); briefing = snapshot; resumedID = route.id; exited = false
             cancelReminders()
             record("restore", title: "Экспедиция восстановлена", text: "Игра на паузе. Продолжите, когда будете готовы.")
         } catch {

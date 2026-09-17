@@ -1495,7 +1495,7 @@ final class ExpeditionRecoveryTests: XCTestCase {
         await recovery.settle()
         XCTAssertTrue(client.requests.isEmpty)
         engine.returnToMenu(); await recovery.settle()
-        XCTAssertEqual(client.requests.count, 2)
+        XCTAssertEqual(client.requests.count, 1)
         let request = try XCTUnwrap(client.requests["expedition.return.7"])
         let url = try XCTUnwrap(URL(string: request.content.userInfo["url"] as! String))
         let eventID = UUID(uuidString: request.content.userInfo["eventID"] as! String)!
@@ -1504,7 +1504,7 @@ final class ExpeditionRecoveryTests: XCTestCase {
         recovery.open(url, pushEventID: eventID)
         XCTAssertEqual(recovery.history.filter { $0.kind == "pushOpened" }.count, 1)
         engine.togglePause(); engine.returnToMenu(); await recovery.settle()
-        XCTAssertEqual(client.requests.count, 2)
+        XCTAssertEqual(client.requests.count, 1)
         recovery.deleteSave(); await recovery.settle()
         XCTAssertTrue(client.requests.isEmpty)
         recovery.open(url); XCTAssertNotNil(recovery.message); XCTAssertEqual(engine.state, .ready)
@@ -1512,7 +1512,10 @@ final class ExpeditionRecoveryTests: XCTestCase {
     func testCalendarDaysAcrossDST() throws {
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "America/New_York")!
         let now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 7, hour: 14, minute: 30))!
-        let requests = ReminderPlan.requests(id: UUID(), eventID: UUID(), now: now, calendar: calendar)
+        let (engine, _, _, _) = fixture()
+        engine.startGame()
+        var snapshot = engine.snapshot(); snapshot.energy = ReminderPlanner.lowEnergy
+        let requests = ReminderPlanner.requests(save: snapshot, eventID: UUID(), now: now, calendar: calendar)
         for (index, day) in [8, 14].enumerated() {
             let trigger = try XCTUnwrap(requests[index].trigger as? UNCalendarNotificationTrigger)
             XCTAssertEqual(trigger.dateComponents.day, day)
@@ -1614,5 +1617,107 @@ extension ExpeditionRecoveryTests {
         XCTAssertEqual(reference.velocity, resumed.velocity)
         XCTAssertEqual(reference.energy, resumed.energy)
         XCTAssertEqual(reference.runElapsed, resumed.runElapsed)
+    }
+}
+
+
+extension ExpeditionRecoveryTests {
+    func testPlannerTiersAndSnooze() async throws {
+        let (engine, recovery, client, _) = fixture()
+        engine.startGame(); engine.returnToMenu()
+        var save = try recovery.load()
+        XCTAssertEqual(ReminderPlanner.tier(for: save), .week)
+        save.energy = ReminderPlanner.lowEnergy
+        XCTAssertEqual(ReminderPlanner.tier(for: save), .day)
+        save.hasBlackBox = true; save.position = save.level.base
+        XCTAssertEqual(ReminderPlanner.tier(for: save), .hour)
+        let plan = ReminderPlanner.requests(save: save, eventID: UUID(), now: recovery.currentDate, calendar: .current)
+        XCTAssertEqual(plan.map(\.identifier), ["expedition.return.hour", "expedition.return.7"])
+        XCTAssertEqual(plan.first?.content.categoryIdentifier, "EXPEDITION_RETURN")
+        recovery.snooze(save.id); await recovery.settle()
+        XCTAssertEqual(Set(client.requests.keys), ["expedition.return.1", "expedition.return.7"])
+        recovery.snooze(save.id); await recovery.settle()
+        XCTAssertEqual(client.requests.count, 2)
+        recovery.open(ReturnRoute(id: save.id).url); await recovery.settle()
+        XCTAssertTrue(client.requests.isEmpty)
+        XCTAssertNotNil(recovery.briefing)
+        recovery.finishBriefing(restart: false)
+        XCTAssertEqual(engine.state, .playing)
+        recovery.finishBriefing(restart: false)
+        XCTAssertEqual(engine.state, .playing)
+    }
+
+    func testLegacySchemaAndUnknownSchema() throws {
+        let (engine, recovery, _, directory) = fixture()
+        engine.startGame(); engine.returnToMenu()
+        let url = directory.appendingPathComponent("expedition.json")
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        json.removeValue(forKey: "schemaVersion"); json.removeValue(forKey: "savedAt")
+        try JSONSerialization.data(withJSONObject: json).write(to: url)
+        XCTAssertEqual(try recovery.load().schemaVersion, 2)
+        XCTAssertNil(try recovery.load().savedAt)
+        json["schemaVersion"] = 99
+        try JSONSerialization.data(withJSONObject: json).write(to: url)
+        XCTAssertThrowsError(try recovery.load())
+    }
+
+    func testBriefingFiltersRunAndUsesSavedDate() throws {
+        let (engine, recovery, _, _) = fixture()
+        engine.startGame(); engine.returnToMenu()
+        let save = try recovery.load()
+        let note = BlackBoxEntry(runID: save.id, seq: 1, t: 0, wallTime: recovery.currentDate,
+                                level: .info, category: .captain, message: "Homeward", attrs: [:])
+        let foreign = BlackBoxEntry(runID: UUID(), seq: 2, t: 0, wallTime: recovery.currentDate,
+                                   level: .info, category: .captain, message: "Other run", attrs: [:])
+        let data = CaptainBriefingData(snapshot: save, entries: [foreign, note], now: recovery.currentDate.addingTimeInterval(3 * 86400), calendar: Calendar(identifier: .gregorian))
+        XCTAssertEqual(data.days, 3); XCTAssertEqual(data.quote, "Homeward")
+        XCTAssertEqual(data.recent.map(\.id), [note.id])
+    }
+
+    func testTypedRoutesColdStartAndDeduplication() throws {
+        let id = UUID()
+        XCTAssertEqual(DeepLinkParser.parse(ReturnRoute(id: id).url), .expedition(id))
+        for raw in ["podlodkadive://expedition/no", "podlodkadive://events/extra", "https://expedition/\(id)", "podlodkadive://expedition/\(id)?x=1", "podlodkadive://user@events", "podlodkadive://events:80"] {
+            XCTAssertNil(DeepLinkParser.parse(URL(string: raw)!))
+        }
+        for route in [AppRoute.expedition(id), .briefing(id), .events, .journal(nil), .blackBox(id), .campaign(.aster)] {
+            XCTAssertEqual(try JSONDecoder().decode(AppRoute.self, from: JSONEncoder().encode(route)), route)
+        }
+        var date = Date(timeIntervalSince1970: 100)
+        let router = NavigationCoordinator(now: { date })
+        var received: [AppRoute] = []
+        router.receive(.expedition(id)); router.receive(.expedition(id))
+        router.connect { route, _ in received.append(route) }
+        XCTAssertEqual(received, [.expedition(id)])
+        router.receive(.expedition(id)); XCTAssertEqual(received.count, 1)
+        date.addTimeInterval(2)
+        router.receive(.expedition(id)); XCTAssertEqual(received.count, 2)
+        XCTAssertNil(router.pending)
+    }
+}
+
+
+extension ExpeditionRecoveryTests {
+    func testNotificationActionsUseTypedRouter() {
+        let id = UUID(), url = ReturnRoute(id: UUID()).url
+        let expedition = ReturnRoute(id: id).url
+        XCTAssertEqual(NotificationRoute.resolve(url: expedition, action: "CONTINUE"), .expedition(id))
+        XCTAssertEqual(NotificationRoute.resolve(url: expedition, action: UNNotificationDefaultActionIdentifier), .expedition(id))
+        XCTAssertEqual(NotificationRoute.resolve(url: expedition, action: "LATER"), .postpone(id))
+        XCTAssertNil(NotificationRoute.resolve(url: url, action: UNNotificationDismissActionIdentifier))
+        XCTAssertNil(NotificationRoute.resolve(url: URL(string: "https://example.com")!, action: "CONTINUE"))
+    }
+
+    func testReturnAfterSecondAbsenceShowsBriefingAgain() async throws {
+        let (engine, recovery, _, _) = fixture()
+        engine.startGame(); engine.returnToMenu()
+        let id = try XCTUnwrap(recovery.savedID)
+        recovery.open(ReturnRoute(id: id).url)
+        recovery.finishBriefing(restart: false)
+        engine.pause(); XCTAssertTrue(recovery.save(exiting: true))
+        recovery.open(ReturnRoute(id: id).url)
+        XCTAssertNotNil(recovery.briefing)
+        XCTAssertEqual(engine.state, .paused)
+        await recovery.settle()
     }
 }

@@ -316,11 +316,38 @@ extension AccessibilityAuditTests {
         try app.performAccessibilityAudit()
         app.buttons["closeEvents"].tap()
         resume.tap()
-        XCTAssertTrue(app.buttons["resumeDive"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["briefingResume"].waitForExistence(timeout: 5))
         try app.performAccessibilityAudit()
         app.terminate()
         app.launchArguments = []
         app.launch()
         XCTAssertTrue(app.buttons["continueExpedition"].waitForExistence(timeout: 5))
+    }
+}
+
+
+extension AccessibilityAuditTests {
+    @MainActor func testReturnBriefingAccessibility() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-returnBriefingAudit"]
+        app.launch()
+        XCTAssertTrue(app.buttons["briefingResume"].waitForExistence(timeout: 10))
+        try app.performAccessibilityAudit { issue in
+            print("Briefing audit: \(issue.compactDescription): \(issue.element?.debugDescription ?? issue.detailedDescription)")
+            return false
+        }
+        app.buttons["briefingResume"].tap()
+        XCTAssertTrue(app.buttons["pauseDive"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor func testRouterEventsAndJournal() throws {
+        for (url, control) in [("podlodkadive://events", "closeEvents"), ("podlodkadive://journal", "closeArchives")] {
+            let app = XCUIApplication()
+            app.launchArguments = ["-routeAudit", url]
+            app.launch()
+            XCTAssertTrue(app.buttons[control].waitForExistence(timeout: 5))
+            if control == "closeEvents" { try app.performAccessibilityAudit() }
+            app.terminate()
+        }
     }
 }

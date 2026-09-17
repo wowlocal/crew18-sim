@@ -3,7 +3,7 @@
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
-sources = [root / "PodlodkaDive" / name for name in ("ExpeditionLog.swift", "ExpeditionJournalView.swift", "ExpeditionJournal.swift", "BureauView.swift", "CaptainLogger.swift", "BlackBox.swift", "BlackBoxView.swift", "OceanLevel.swift", "CampaignMission.swift", "CampaignView.swift", "GameEngine.swift", "ExpeditionRecovery.swift", "GameCanvas.swift", "VoiceOverAnnouncer.swift", "GameView.swift")]
+sources = [root / "PodlodkaDive" / name for name in ("ExpeditionLog.swift", "ExpeditionJournalView.swift", "ExpeditionJournal.swift", "BureauView.swift", "CaptainLogger.swift", "BlackBox.swift", "BlackBoxView.swift", "OceanLevel.swift", "CampaignMission.swift", "CampaignView.swift", "GameEngine.swift", "ExpeditionRecovery.swift", "NavigationCoordinator.swift", "ReminderPlanner.swift", "CaptainBriefing.swift", "GameCanvas.swift", "VoiceOverAnnouncer.swift", "GameView.swift")]
 imports = set()
 sections = []
 for source in sources:
