@@ -17,7 +17,7 @@ final class GameEngineTests: XCTestCase {
         let storage = defaults ?? UserDefaults(suiteName: suite)!
         if defaults == nil { addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) } }
         var values = randomValues
-        let engine = GameEngine(defaults: storage, level: level ?? empty,
+        let engine = GameEngine(defaults: storage, level: level ?? empty, journal: DiscardJournal(),
                                 randomValue: { values.isEmpty ? 1 : values.removeFirst() })
         engine.resize(to: size)
         engine.startGame()
@@ -119,7 +119,7 @@ final class GameEngineTests: XCTestCase {
         engine.customize(.classic)
         engine.customize(.neon)
         XCTAssertEqual(engine.crystals, 0, "Owned styles equip for free")
-        let restored = GameEngine(defaults: defaults, level: level)
+        let restored = GameEngine(defaults: defaults, level: level, journal: DiscardJournal())
         XCTAssertEqual(restored.selectedStyle, .neon)
         XCTAssertTrue(restored.owns(.neon))
         XCTAssertEqual(restored.crystals, 0)
@@ -137,7 +137,7 @@ final class GameEngineTests: XCTestCase {
         level.pickups = [OceanPickup(id: 1, kind: .crystal, position: level.spawn)]
         let engine = makeEngine(level: level, defaults: defaults)
         advance(engine, 0.1)
-        XCTAssertEqual(GameEngine(defaults: defaults).crystals, 10)
+        XCTAssertEqual(GameEngine(defaults: defaults, journal: DiscardJournal()).crystals, 10)
         XCTAssertEqual(engine.cargoValue, 0, "Crystals do not change salvage scoring")
     }
 
@@ -1027,4 +1027,94 @@ extension GameEngineTests {
         XCTAssertEqual(captured.map { CGPoint(x: $0.x, y: $0.y) }, trajectory)
         XCTAssertTrue(entries.contains { $0.message == "blackBox" })
     }
+}
+
+@MainActor
+final class ExpeditionJournalTests: XCTestCase {
+    private func location() -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return directory.appendingPathComponent("journal.sqlite")
+    }
+
+    private func entry(_ dive: UUID, _ index: Int, kind: String = "snapshot") -> JournalEntry {
+        JournalEntry(id: UUID(), diveID: dive, date: Date(timeIntervalSince1970: Double(index)),
+            elapsed: Double(index), kind: kind, severity: "info", message: "Событие '\(index)'",
+            boat: BoatSnapshot(x: 1, y: 2, energy: 93, hull: 2, cargo: 600,
+                blackBox: true, shield: false, zone: "ocean", state: "playing", speed: 10))
+    }
+
+    func testBatchesSurviveReopenWithPaginationAndSeparateDives() async throws {
+        let url = location()
+        let journal = ExpeditionJournal(url: url)
+        let first = UUID(), second = UUID()
+        for index in 0..<235 { journal.record(entry(first, index, kind: index == 3 ? "boost" : "snapshot")) }
+        journal.record(entry(first, 236, kind: "finish"))
+        journal.record(entry(second, 300, kind: "start"))
+        let receipts = try await journal.receipts()
+        XCTAssertEqual(receipts.map(\.id), [second, first])
+        XCTAssertEqual(receipts[1].boosts, 1)
+        XCTAssertTrue(receipts[0].outcome.contains("Дело не закрыто"))
+        let reopened = ExpeditionJournal(url: url)
+        let page1 = try await reopened.entries(diveID: first)
+        let page2 = try await reopened.entries(diveID: first, offset: 200)
+        XCTAssertEqual(page1.count, 200)
+        XCTAssertEqual(page2.count, 36)
+        XCTAssertEqual(page1[3].boat.energy, 93)
+        XCTAssertEqual(page2.last?.kind, "finish")
+        XCTAssertEqual((page1 + page2).map(\.elapsed), (0..<235).map(Double.init) + [236])
+    }
+
+    func testWriteFailureIsReportedAndRetriedWithoutDuplicates() async throws {
+        let url = location()
+        let parent = url.deletingLastPathComponent()
+        try Data("blocks directory creation".utf8).write(to: parent)
+        let journal = ExpeditionJournal(url: url)
+        let event = entry(UUID(), 0, kind: "finish")
+        journal.record(event)
+        do {
+            _ = try await journal.receipts()
+            XCTFail("Storage failure must be visible")
+        } catch { XCTAssertFalse(error.localizedDescription.isEmpty) }
+        try FileManager.default.removeItem(at: parent)
+        journal.record(event) // same event ID remains idempotent after retry
+        let receipts = try await journal.receipts()
+        XCTAssertEqual(receipts.count, 1)
+        let entries = try await journal.entries(diveID: event.diveID)
+        XCTAssertEqual(entries.count, 1)
+    }
+
+    func testEngineRecordsPostCostStateSnapshotsPauseAndAbandonment() async throws {
+        let journal = ExpeditionJournal(url: location())
+        let suite = "BureauTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let level = OceanLevel(size: CGSize(width: 1560, height: 2600), spawn: CGPoint(x: 300, y: 300),
+            base: CGPoint(x: 180, y: 200), wreck: CGPoint(x: 1370, y: 2330))
+        let engine = GameEngine(defaults: defaults, level: level, journal: journal, randomValue: { 1 })
+        engine.startGame()
+        let id = try XCTUnwrap(engine.diveID)
+        engine.activateBoost()
+        engine.activateBoost()
+        engine.step(deltaTime: .nan)
+        for _ in 0..<660 { engine.step(deltaTime: 1.0 / 120) }
+        engine.pause()
+        engine.returnToMenu()
+        engine.startGame()
+        XCTAssertNotEqual(engine.diveID, id)
+        let entries = try await journal.entries(diveID: id)
+        XCTAssertEqual(entries.filter { $0.kind == "boost" }.count, 1)
+        XCTAssertEqual(entries.first { $0.kind == "boost" }?.boat.energy, 93)
+        XCTAssertTrue(entries.contains { $0.kind == "ability.rejected" })
+        XCTAssertTrue(entries.contains { $0.kind == "simulation.invalidDelta" && $0.severity == "error" })
+        XCTAssertTrue(entries.contains { $0.kind == "snapshot" })
+        XCTAssertTrue(entries.contains { $0.boat.state == "paused" })
+        XCTAssertEqual(entries.filter { $0.kind == "finish" }.count, 1)
+        XCTAssertTrue(entries.last?.message.contains("прервана") == true)
+    }
+}
+
+private struct DiscardJournal: ExpeditionLogging {
+    func record(_ entry: JournalEntry) {}
+    func flush() {}
 }

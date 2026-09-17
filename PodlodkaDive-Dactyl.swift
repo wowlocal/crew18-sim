@@ -4,10 +4,824 @@ import Combine
 import Foundation
 import OSLog
 import QuartzCore
+import SQLite3
 import Speech
 import SwiftData
 import SwiftUI
 import UIKit
+
+// MARK: - ExpeditionLog.swift
+
+struct ExpeditionEvent: Codable, Identifiable, Sendable {
+    var id: String { "\(expeditionId):\(sequenceNumber)" }
+    let expeditionId: String
+    let sequenceNumber: Int
+    let timestamp: Date
+    let schemaVersion: Int
+    let category: String
+    let type: String
+    let severity: String
+    let payload: [String: String]
+    var time: Double { Double(payload["time"] ?? "0") ?? 0 }
+}
+
+struct ExpeditionSummary: Identifiable, Sendable {
+    let id: String
+    let date: Date
+    let duration: Double
+    let result: String
+    let cargo: String
+    let reason: String
+}
+
+/// Confined to its owning actor. No SQLite work is performed on MainActor.
+final class LogStore {
+    private var db: OpaquePointer?
+    static var defaultPath: String {
+        let folder = URL.applicationSupportDirectory.appendingPathComponent("Expedition", isDirectory: true)
+        return folder.appendingPathComponent("journal.sqlite").path
+    }
+    init(path: String, recover: Bool = false) throws {
+        if path != ":memory:" {
+            try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        guard sqlite3_open(path, &db) == SQLITE_OK else { throw failure() }
+        sqlite3_busy_timeout(db, 1000)
+        try execute("PRAGMA auto_vacuum=INCREMENTAL; PRAGMA journal_size_limit=1048576; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS expeditions(id TEXT PRIMARY KEY, date REAL, duration REAL DEFAULT 0, result TEXT DEFAULT 'active', cargo TEXT DEFAULT '0', reason TEXT DEFAULT ''); CREATE TABLE IF NOT EXISTS events(expedition TEXT REFERENCES expeditions(id) ON DELETE CASCADE, sequence INTEGER, category TEXT, type TEXT, json TEXT, PRIMARY KEY(expedition,sequence)); CREATE INDEX IF NOT EXISTS event_type ON events(type,expedition,sequence);")
+        if recover { try execute("UPDATE expeditions SET result='interrupted', reason='Application interrupted' WHERE result='active'") }
+    }
+    deinit { sqlite3_close(db) }
+    private func failure() -> NSError {
+        NSError(domain: "ExpeditionSQLite", code: Int(sqlite3_errcode(db)), userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))])
+    }
+    func execute(_ sql: String) throws {
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw failure() }
+    }
+    private func statement(_ sql: String, _ values: [String]) throws -> OpaquePointer {
+        var result: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &result, nil) == SQLITE_OK, let result else { throw failure() }
+        for (index, value) in values.enumerated() {
+            sqlite3_bind_text(result, Int32(index + 1), value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        }
+        return result
+    }
+    private func write(_ sql: String, _ values: [String]) throws {
+        let stmt = try statement(sql, values); defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
+    }
+    func batch(_ events: [ExpeditionEvent]) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            for event in events {
+                try write("INSERT OR IGNORE INTO expeditions(id,date) VALUES(?,?)", [event.expeditionId, String(event.timestamp.timeIntervalSince1970)])
+                let json = String(decoding: try JSONEncoder().encode(event), as: UTF8.self)
+                try write("INSERT OR IGNORE INTO events VALUES(?,?,?,?,?)", [event.expeditionId, String(event.sequenceNumber), event.category, event.type, json])
+                try write("UPDATE expeditions SET duration=MAX(duration,?) WHERE id=?", [String(event.time), event.expeditionId])
+                if let cargo = event.payload["cargo"] {
+                    try write("UPDATE expeditions SET cargo=? WHERE id=?", [cargo, event.expeditionId])
+                }
+                if event.type == "end" {
+                    try write("UPDATE expeditions SET result=?, reason=? WHERE id=?", [event.payload["result"] ?? "ended", event.payload["reason"] ?? "", event.expeditionId])
+                }
+            }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    func rows(_ sql: String, _ values: [String] = []) throws -> [[String]] {
+        let stmt = try statement(sql, values); defer { sqlite3_finalize(stmt) }
+        var rows: [[String]] = []
+        while true {
+            let code = sqlite3_step(stmt)
+            if code == SQLITE_DONE { return rows }
+            guard code == SQLITE_ROW else { throw failure() }
+            rows.append((0..<sqlite3_column_count(stmt)).map { index in
+                sqlite3_column_text(stmt, index).map { String(cString: $0) } ?? ""
+            })
+        }
+    }
+    /// Keep at most 50 finished runs and 32 MB of event payloads. Active runs are protected.
+    func prune() throws {
+        try execute("DELETE FROM expeditions WHERE result!='active' AND id NOT IN (SELECT id FROM expeditions ORDER BY date DESC LIMIT 50)")
+        while let size = try rows("SELECT COALESCE(SUM(length(json)),0) FROM events").first?.first,
+              (Int(size) ?? 0) > 32 * 1024 * 1024 {
+            let old = try rows("SELECT id FROM expeditions WHERE result!='active' ORDER BY date LIMIT 1")
+            guard let id = old.first?.first else { break }
+            try write("DELETE FROM expeditions WHERE id=?", [id])
+        }
+        try execute("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA incremental_vacuum(256)")
+    }
+}
+
+actor ExpeditionLogger {
+    static let shared = ExpeditionLogger()
+    private let path: String
+    private var store: LogStore?
+    private var pending: [ExpeditionEvent] = []
+    private var sequences: [String: Int] = [:]
+    private var timer: Task<Void, Never>?
+    private(set) var lastError: String?
+    private(set) var droppedSnapshots = 0
+    private(set) var batchCount = 0
+    init(path: String = LogStore.defaultPath) { self.path = path }
+    func log(expeditionId: String, type: String, category: String = "Gameplay", severity: String = "info", payload: [String: String] = [:]) {
+        if type == "snapshot", pending.count >= 512 { droppedSnapshots += 1; return }
+        let sequence = (sequences[expeditionId] ?? 0) + 1
+        sequences[expeditionId] = sequence
+        pending.append(.init(expeditionId: expeditionId, sequenceNumber: sequence, timestamp: Date(), schemaVersion: 1, category: category, type: type, severity: severity, payload: payload))
+        if pending.count >= 64 || type == "end" { flush() }
+        if timer == nil {
+            timer = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                await self?.timedFlush()
+            }
+        }
+    }
+    func state(expeditionId: String, payload: [String: String]) { log(expeditionId: expeditionId, type: "snapshot", category: "State", payload: payload) }
+    func error(expeditionId: String, message: String) { log(expeditionId: expeditionId, type: "error", category: "Errors", severity: "error", payload: ["message": message]) }
+    private func timedFlush() {
+        timer = nil
+        flush()
+        if !pending.isEmpty {
+            timer = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                await self?.timedFlush()
+            }
+        }
+    }
+    func flush() {
+        do {
+            if store == nil { store = try LogStore(path: path, recover: true) }
+            guard !pending.isEmpty else { return }
+            try store?.batch(pending)
+            pending.removeAll(keepingCapacity: true)
+            batchCount += 1
+            lastError = nil
+            try store?.prune()
+        } catch { lastError = error.localizedDescription }
+    }
+}
+
+actor LogReader {
+    private let path: String
+    private var store: LogStore?
+    init(path: String = LogStore.defaultPath) { self.path = path }
+    private func database() throws -> LogStore {
+        if let store { return store }
+        let opened = try LogStore(path: path); store = opened; return opened
+    }
+    func expeditions(limit: Int = 30, offset: Int = 0) throws -> [ExpeditionSummary] {
+        try database().rows("SELECT id,date,duration,result,cargo,reason FROM expeditions ORDER BY date DESC LIMIT ? OFFSET ?", [String(max(1, min(limit, 500))), String(max(0, offset))]).map {
+            ExpeditionSummary(id: $0[0], date: Date(timeIntervalSince1970: Double($0[1]) ?? 0), duration: Double($0[2]) ?? 0, result: $0[3], cargo: $0[4], reason: $0[5])
+        }
+    }
+    func events(expeditionId: String, after: Int = 0, category: String? = nil, limit: Int = 200) throws -> [ExpeditionEvent] {
+        let filter = category == nil ? "" : " AND category=?"
+        var args = [expeditionId, String(after)]
+        if let category { args.append(category) }
+        args.append(String(max(1, min(limit, 1000))))
+        return try database().rows("SELECT json FROM events WHERE expedition=? AND sequence>?\(filter) ORDER BY sequence LIMIT ?", args).map { try JSONDecoder().decode(ExpeditionEvent.self, from: Data($0[0].utf8)) }
+    }
+    func transitions(expeditionId: String? = nil) throws -> [FlowEdge] {
+        let rows = try database().rows("SELECT json FROM events WHERE type='navigation'" + (expeditionId == nil ? "" : " AND expedition=?"), expeditionId.map { [$0] } ?? [])
+        return FlowEdge.aggregate(try rows.map { try JSONDecoder().decode(ExpeditionEvent.self, from: Data($0[0].utf8)) })
+    }
+}
+
+struct FlowEdge: Identifiable, Sendable {
+    let from: String
+    let to: String
+    var count: Int
+    var id: String { from + "→" + to }
+    static func aggregate(_ events: [ExpeditionEvent]) -> [FlowEdge] {
+        var edges: [String: FlowEdge] = [:]
+        for event in events where event.type == "navigation" {
+            guard let from = event.payload["fromScreen"], let to = event.payload["toScreen"], from != to else { continue }
+            let edge = FlowEdge(from: from, to: to, count: 0)
+            edges[edge.id, default: edge].count += 1
+        }
+        return edges.values.sorted { $0.id < $1.id }
+    }
+}
+
+struct ReplayTimeline: Sendable {
+    let events: [ExpeditionEvent]
+    let duration: Double
+    let snapshots: [ExpeditionEvent]
+    let highlights: [ExpeditionEvent]
+    init(events: [ExpeditionEvent]) {
+        self.events = events
+        duration = events.map(\.time).max() ?? 0
+        highlights = Self.selectHighlights(events, duration: duration)
+        snapshots = events.filter { $0.payload["x"] != nil }.sorted { $0.time == $1.time ? $0.sequenceNumber < $1.sequenceNumber : $0.time < $1.time }
+    }
+    func state(at time: Double) -> [String: String] {
+        let frames = snapshots
+        guard let first = frames.first else { return [:] }
+        var low = 0, high = frames.count
+        while low < high {
+            let middle = (low + high) / 2
+            if frames[middle].time <= time { low = middle + 1 } else { high = middle }
+        }
+        let previous = low > 0 ? frames[low - 1] : first
+        var result = previous.payload
+        if low < frames.count, frames[low].time > previous.time,
+           frames[low].payload["zone"] == previous.payload["zone"] {
+            let next = frames[low]
+            let fraction = max(0, min(1, (time - previous.time) / (next.time - previous.time)))
+            for key in ["x", "y", "vx", "vy"] {
+                if let a = Double(previous.payload[key] ?? ""), let b = Double(next.payload[key] ?? "") { result[key] = String(a + (b - a) * fraction) }
+            }
+        }
+        return result
+    }
+    private static func selectHighlights(_ events: [ExpeditionEvent], duration: Double) -> [ExpeditionEvent] {
+        let priorities = ["blackBox": 3, "docking": 3, "damage": 2, "mine": 2, "pickup": 1, "sonar": 1, "boost": 1]
+        var selected: [ExpeditionEvent] = []
+        for event in events.sorted(by: { (priorities[$0.type] ?? 0) == (priorities[$1.type] ?? 0) ? $0.sequenceNumber < $1.sequenceNumber : (priorities[$0.type] ?? 0) > (priorities[$1.type] ?? 0) }) where priorities[event.type] != nil {
+            if selected.allSatisfy({ abs($0.time - event.time) >= max(5, duration * 0.08) }) { selected.append(event) }
+            if selected.count == 3 { break }
+        }
+        return selected.sorted { $0.time < $1.time }
+    }
+}
+
+// MARK: - ExpeditionJournalView.swift
+
+struct ExpeditionJournalView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var runs: [ExpeditionSummary] = []
+    @State private var error: String?
+    @State private var hasMore = true
+    private let reader = LogReader()
+    var body: some View {
+        NavigationStack {
+            List {
+                NavigationLink("Граф всех игр") { ExpeditionFlowView(expeditionId: nil) }
+                    .accessibilityIdentifier("allFlows")
+                if let error { Text(error).foregroundStyle(.red) }
+                if runs.isEmpty { Text("Экспедиций пока нет") }
+                ForEach(runs) { run in
+                    NavigationLink {
+                        ExpeditionDetailView(run: run)
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text(run.date, style: .date)
+                            Text(run.date, style: .time)
+                            Text("\(run.result) · \(Int(run.duration)) с · Груз: \(run.cargo)")
+                            if !run.reason.isEmpty { Text(run.reason).font(.caption) }
+                        }
+                    }.accessibilityIdentifier("expeditionRow")
+                }
+                if hasMore { Button("Ещё экспедиции") { Task { await load() } } }
+            }
+            .navigationTitle("Журнал экспедиций")
+            .toolbar { Button("Закрыть") { dismiss() } }
+            .task { await ExpeditionLogger.shared.flush(); await load() }
+        }
+    }
+    private func load() async {
+        do {
+            let page = try await reader.expeditions(offset: runs.count)
+            runs.append(contentsOf: page); hasMore = page.count == 30
+            error = await ExpeditionLogger.shared.lastError
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+struct ExpeditionDetailView: View {
+    let run: ExpeditionSummary
+    @State private var category = "Все"
+    @State private var events: [ExpeditionEvent] = []
+    @State private var error: String?
+    @State private var hasMore = true
+    private let reader = LogReader()
+    var body: some View {
+        List {
+            NavigationLink("Реплей") { ExpeditionReplayView(expeditionId: run.id) }.accessibilityIdentifier("replay")
+            NavigationLink("Граф переходов") { ExpeditionFlowView(expeditionId: run.id) }.accessibilityIdentifier("runFlow")
+            Picker("Фильтр", selection: $category) {
+                ForEach(["Все", "Gameplay", "State", "Errors"], id: \.self) { Text($0) }
+            }
+            if let error { Text(error).foregroundStyle(.red) }
+            ForEach(events) { event in
+                DisclosureGroup("\(event.sequenceNumber) · \(String(format: "%.1f", event.time)) с · \(event.type)") {
+                    Text("\(event.timestamp.formatted()) · v\(event.schemaVersion) · \(event.severity)")
+                    ForEach(event.payload.keys.sorted(), id: \.self) { key in
+                        Text("\(key): \(event.payload[key] ?? "")").font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                }
+            }
+            if hasMore { Button("Ещё события") { Task { await load() } } }
+        }
+        .navigationTitle("События")
+        .task(id: category) { events = []; hasMore = true; await load() }
+    }
+    private func load() async {
+        let filter = category
+        do {
+            let page = try await reader.events(expeditionId: run.id, after: events.last?.sequenceNumber ?? 0, category: filter == "Все" ? nil : filter)
+            guard !Task.isCancelled, filter == category else { return }
+            events.append(contentsOf: page); hasMore = page.count == 200
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+struct ExpeditionReplayView: View {
+    let expeditionId: String
+    @State private var timeline = ReplayTimeline(events: [])
+    @State private var time = 0.0
+    @State private var playing = false
+    @State private var loading = true
+    @State private var error: String?
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                if loading { ProgressView("Чтение реплея…") }
+                if let error { Text(error).foregroundStyle(.red) }
+                ReplayMap(state: timeline.state(at: time)).frame(height: 330)
+                    .accessibilityLabel("Положение лодки на записи")
+                Text("\(time, specifier: "%.1f") / \(timeline.duration, specifier: "%.1f") с")
+                    .monospacedDigit().accessibilityIdentifier("replayTime")
+                Button(playing ? "Пауза" : "Воспроизвести") {
+                    if time >= timeline.duration { time = 0 }
+                    playing.toggle()
+                }.accessibilityIdentifier("replayPlay").disabled(timeline.duration <= 0)
+                Slider(value: $time, in: 0...max(0.001, timeline.duration)) { _ in playing = false }
+                    .accessibilityLabel("Время реплея").accessibilityIdentifier("replayTimeline")
+                GeometryReader { geometry in
+                    ForEach(timeline.highlights) { event in
+                        Button { playing = false; time = event.time } label: { Image(systemName: "bookmark.fill") }
+                            .accessibilityLabel("\(event.type), \(Int(event.time)) секунд")
+                            .position(x: 12 + (geometry.size.width - 24) * event.time / max(1, timeline.duration), y: 12)
+                    }
+                }.frame(height: 30)
+                ForEach(timeline.highlights) { event in
+                    Button("\(event.type) · \(Int(event.time)) с") { playing = false; time = event.time }
+                        .accessibilityIdentifier("replayHighlight")
+                }
+                let state = timeline.state(at: time)
+                Text("Энергия: \(state["energy"] ?? "—") · Корпус: \(state["hull"] ?? "—")")
+                Text("Груз: \(state["cargo"] ?? "—") · Цель: \(state["target"] ?? "—")")
+                ForEach(timeline.events.filter { $0.type != "snapshot" && $0.time <= time && $0.time >= time - 3 }.suffix(5)) { event in
+                    Text(event.type).font(.caption)
+                }
+            }.padding()
+        }
+        .navigationTitle("Реплей")
+        .task {
+            do {
+                let reader = LogReader()
+                var events: [ExpeditionEvent] = []
+                while !Task.isCancelled {
+                    let page = try await reader.events(expeditionId: expeditionId, after: events.last?.sequenceNumber ?? 0, limit: 1000)
+                    events.append(contentsOf: page)
+                    if page.count < 1000 { break }
+                }
+                timeline = ReplayTimeline(events: events); loading = false
+            } catch { self.error = error.localizedDescription; loading = false }
+        }
+        .task(id: playing) {
+            guard playing else { return }
+            let start = Date().timeIntervalSinceReferenceDate - time
+            while !Task.isCancelled && playing {
+                try? await Task.sleep(for: .milliseconds(33))
+                guard !Task.isCancelled else { return }
+                time = min(timeline.duration, Date().timeIntervalSinceReferenceDate - start)
+                if time >= timeline.duration { playing = false }
+            }
+        }
+        .onDisappear { playing = false }
+    }
+}
+
+private struct ReplayMap: View {
+    let state: [String: String]
+    var body: some View {
+        Canvas { context, size in
+            let width = Double(state["width"] ?? "1560") ?? 1560
+            let height = Double(state["height"] ?? "2600") ?? 2600
+            let scale = min(size.width / width, size.height / height)
+            func point(_ x: String, _ y: String) -> CGPoint { CGPoint(x: (Double(x) ?? 0) * scale, y: (Double(y) ?? 0) * scale) }
+            if state["zone"] == "ocean" {
+                for rock in (state["rocks"] ?? "").split(separator: ";") {
+                    let vertices = rock.split(separator: ":").map { $0.split(separator: ",").map(String.init) }.filter { $0.count == 2 }
+                    var path = Path()
+                    for (index, vertex) in vertices.enumerated() {
+                        let p = point(vertex[0], vertex[1])
+                        if index == 0 { path.move(to: p) } else { path.addLine(to: p) }
+                    }
+                    path.closeSubpath(); context.fill(path, with: .color(.gray.opacity(0.5)))
+                }
+                for key in ["pickups", "mines"] {
+                    for object in (state[key] ?? "").split(separator: ";") {
+                        let parts = object.split(separator: ",").map(String.init)
+                        guard parts.count >= 4, parts[1] != "spent" else { continue }
+                        let p = point(parts[2], parts[3])
+                        context.fill(Path(ellipseIn: CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)), with: .color(key == "mines" ? .red : .green))
+                    }
+                }
+            }
+            let target = point(state["targetX"] ?? "0", state["targetY"] ?? "0")
+            context.stroke(Path(ellipseIn: CGRect(x: target.x - 6, y: target.y - 6, width: 12, height: 12)), with: .color(.orange), lineWidth: 2)
+            let boat = point(state["x"] ?? "0", state["y"] ?? "0")
+            context.fill(Path(ellipseIn: CGRect(x: boat.x - 6, y: boat.y - 4, width: 12, height: 8)), with: .color(.cyan))
+        }.background(.black.opacity(0.4)).clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+struct ExpeditionFlowView: View {
+    let expeditionId: String?
+    @State private var edges: [FlowEdge] = []
+    @State private var error: String?
+    var body: some View {
+        ScrollView {
+            VStack {
+                Text(expeditionId == nil ? "Все экспедиции" : "Эта экспедиция")
+                Canvas { context, size in
+                    let nodes = Array(Set(edges.flatMap { [$0.from, $0.to] })).sorted()
+                    func point(_ name: String) -> CGPoint {
+                        let index = nodes.firstIndex(of: name) ?? 0
+                        let angle = Double(index) / Double(max(1, nodes.count)) * 2 * .pi - .pi / 2
+                        return CGPoint(x: size.width / 2 + cos(angle) * size.width * 0.35, y: size.height / 2 + sin(angle) * size.height * 0.35)
+                    }
+                    for edge in edges {
+                        let a = point(edge.from), b = point(edge.to)
+                        let angle = atan2(b.y - a.y, b.x - a.x)
+                        let end = CGPoint(x: b.x - cos(angle) * 30, y: b.y - sin(angle) * 30)
+                        var path = Path(); path.move(to: a); path.addLine(to: end)
+                        path.move(to: CGPoint(x: end.x - cos(angle - 0.5) * 10, y: end.y - sin(angle - 0.5) * 10))
+                        path.addLine(to: end)
+                        path.addLine(to: CGPoint(x: end.x - cos(angle + 0.5) * 10, y: end.y - sin(angle + 0.5) * 10))
+                        context.stroke(path, with: .color(.cyan), lineWidth: 2)
+                        context.draw(Text("\(edge.count)").font(.caption).foregroundStyle(.orange), at: CGPoint(x: a.x * 0.4 + b.x * 0.6, y: a.y * 0.4 + b.y * 0.6 - 10))
+                    }
+                    for node in nodes {
+                        context.draw(Text(node).font(.caption.bold()).foregroundStyle(.white), at: point(node))
+                    }
+                }.frame(height: 330).accessibilityHidden(true)
+                if edges.isEmpty { Text("Переходов пока нет") }
+                ForEach(edges) { edge in Text("\(edge.from) → \(edge.to): \(edge.count)") }
+                if let error { Text(error).foregroundStyle(.red) }
+            }.padding()
+        }
+        .navigationTitle("Граф переходов")
+        .accessibilityIdentifier("flowGraph")
+        .task {
+            do { edges = try await LogReader().transitions(expeditionId: expeditionId) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+// MARK: - ExpeditionJournal.swift
+
+struct BoatSnapshot: Codable, Sendable {
+    let x: Double
+    let y: Double
+    let energy: Double
+    let hull: Int
+    let cargo: Int
+    let blackBox: Bool
+    let shield: Bool
+    let zone: String
+    let state: String
+    let speed: Double
+}
+
+struct JournalEntry: Codable, Identifiable, Sendable {
+    let id: UUID
+    let diveID: UUID
+    let date: Date
+    let elapsed: Double
+    let kind: String
+    let severity: String
+    let message: String
+    let boat: BoatSnapshot
+}
+
+struct DiveReceipt: Identifiable, Sendable {
+    let id: UUID
+    let date: Date
+    let outcome: String
+    let boosts: Int
+    let reefs: Int
+    let blackBoxes: Int
+}
+
+protocol ExpeditionLogging: Sendable {
+    func record(_ entry: JournalEntry)
+    func flush()
+}
+
+/// All SQLite work, encoding, batching and reads belong to this serial utility queue.
+/// The caller only enqueues an immutable snapshot; it never waits for disk I/O.
+final class ExpeditionJournal: ExpeditionLogging, @unchecked Sendable {
+    static let shared = ExpeditionJournal(url: FileManager.default.urls(for: .applicationSupportDirectory,
+        in: .userDomainMask)[0].appendingPathComponent("UnderwaterBureau/journal.sqlite"))
+
+    private let url: URL
+    private let queue = DispatchQueue(label: "UnderwaterBureau.database", qos: .utility)
+    private var database: OpaquePointer?
+    private var pending: [JournalEntry] = []
+    private var scheduled = false
+    private var storageError: String?
+    private var dropped = 0
+    private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    init(url: URL) { self.url = url }
+    deinit { if let database { sqlite3_close(database) } }
+
+    func record(_ entry: JournalEntry) {
+        queue.async { [self] in
+            // Bound memory even if the device runs out of space. Surface loss to readers.
+            guard pending.count < 2048 else { dropped += 1; return }
+            pending.append(entry)
+            if pending.count >= 32 || entry.kind == "finish" { persist() }
+            if !scheduled && !pending.isEmpty {
+                scheduled = true
+                queue.asyncAfter(deadline: .now() + 1) { [self] in
+                    scheduled = false
+                    persist()
+                }
+            }
+        }
+    }
+
+    func flush() { queue.async { [self] in persist() } }
+
+    func receipts(offset: Int = 0, diveID: UUID? = nil) async throws -> [DiveReceipt] {
+        try await read { [self] in
+            let sql = """
+                SELECT dive, MIN(wall), COALESCE(MAX(CASE WHEN kind='finish' THEN message END),
+                'Дело не закрыто: погружение идёт или было прервано'),
+                SUM(kind='boost'), SUM(kind='reef.damage'), SUM(kind='pickup.blackBox')
+                FROM events \(diveID.map { "WHERE dive='\($0.uuidString)'" } ?? "") GROUP BY dive ORDER BY MIN(wall) DESC, dive LIMIT 50 OFFSET \(max(0, offset))
+                """
+            let statement = try prepare(sql)
+            defer { sqlite3_finalize(statement) }
+            var result: [DiveReceipt] = []
+            while try next(statement) {
+                guard let id = UUID(uuidString: string(statement, 0)) else { throw JournalError("Некорректный номер дела") }
+                result.append(DiveReceipt(id: id, date: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1)),
+                    outcome: string(statement, 2), boosts: Int(sqlite3_column_int(statement, 3)),
+                    reefs: Int(sqlite3_column_int(statement, 4)), blackBoxes: Int(sqlite3_column_int(statement, 5))))
+            }
+            return result
+        }
+    }
+
+    func entries(diveID: UUID, offset: Int = 0) async throws -> [JournalEntry] {
+        try await read { [self] in
+            let statement = try prepare("SELECT payload FROM events WHERE dive=? ORDER BY sequence LIMIT 200 OFFSET \(max(0, offset))")
+            defer { sqlite3_finalize(statement) }
+            try bind(diveID.uuidString, to: statement, at: 1)
+            var result: [JournalEntry] = []
+            while try next(statement) {
+                result.append(try JSONDecoder().decode(JournalEntry.self, from: Data(string(statement, 0).utf8)))
+            }
+            return result
+        }
+    }
+
+    private func read<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                do {
+                    try open()
+                    persist()
+                    if let storageError { throw JournalError(storageError) }
+                    if dropped > 0 { throw JournalError("Журнал переполнен: потеряно событий \(dropped). Освободите место на устройстве.") }
+                    continuation.resume(returning: try body())
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    private func open() throws {
+        guard database == nil else { return }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var handle: OpaquePointer?
+        guard sqlite3_open(url.path, &handle) == SQLITE_OK else {
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "Не удалось открыть базу"
+            if let handle { sqlite3_close(handle) }
+            throw JournalError(message)
+        }
+        database = handle
+        do {
+            try execute("PRAGMA journal_mode=WAL")
+            try execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    sequence INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, dive TEXT NOT NULL,
+                    wall REAL NOT NULL, kind TEXT NOT NULL, message TEXT NOT NULL, payload TEXT NOT NULL)
+                """)
+            try execute("CREATE INDEX IF NOT EXISTS events_dive ON events(dive, sequence)")
+        } catch {
+            sqlite3_close(handle)
+            database = nil
+            throw error
+        }
+    }
+
+    private func persist() {
+        guard !pending.isEmpty else { return }
+        do {
+            try open()
+            try execute("BEGIN IMMEDIATE")
+            do {
+                let statement = try prepare("INSERT OR IGNORE INTO events(id,dive,wall,kind,message,payload) VALUES(?,?,?,?,?,?)")
+                defer { sqlite3_finalize(statement) }
+                for entry in pending {
+                    sqlite3_reset(statement)
+                    sqlite3_clear_bindings(statement)
+                    try bind(entry.id.uuidString, to: statement, at: 1)
+                    try bind(entry.diveID.uuidString, to: statement, at: 2)
+                    guard sqlite3_bind_double(statement, 3, entry.date.timeIntervalSince1970) == SQLITE_OK else { throw failure() }
+                    try bind(entry.kind, to: statement, at: 4)
+                    try bind(entry.message, to: statement, at: 5)
+                    try bind(String(decoding: JSONEncoder().encode(entry), as: UTF8.self), to: statement, at: 6)
+                    guard sqlite3_step(statement) == SQLITE_DONE else { throw failure() }
+                }
+                try execute("COMMIT")
+                pending.removeAll(keepingCapacity: true)
+                storageError = nil
+            } catch {
+                try? execute("ROLLBACK")
+                throw error
+            }
+        } catch { storageError = "Чек не сохранён: \(error.localizedDescription). Запись будет повторена." }
+    }
+
+    private func execute(_ sql: String) throws {
+        guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else { throw failure() }
+    }
+    private func prepare(_ sql: String) throws -> OpaquePointer {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw failure() }
+        return statement
+    }
+    private func bind(_ value: String, to statement: OpaquePointer, at index: Int32) throws {
+        guard sqlite3_bind_text(statement, index, value, -1, transient) == SQLITE_OK else { throw failure() }
+    }
+    private func next(_ statement: OpaquePointer) throws -> Bool {
+        let result = sqlite3_step(statement)
+        guard result == SQLITE_ROW || result == SQLITE_DONE else { throw failure() }
+        return result == SQLITE_ROW
+    }
+    private func string(_ statement: OpaquePointer, _ column: Int32) -> String {
+        String(cString: sqlite3_column_text(statement, column))
+    }
+    private func failure() -> JournalError { JournalError(String(cString: sqlite3_errmsg(database))) }
+}
+
+struct JournalError: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
+
+// MARK: - BureauView.swift
+
+struct BureauView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var receipts: [DiveReceipt] = []
+    @State private var error: String?
+    @State private var loading = false
+    @State private var hasMore = true
+    let journal: ExpeditionJournal
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Подводное бюро расследований").font(.title2.bold())
+                    Text("Каждое погружение — отдельное дело. Чек расскажет, куда ушла батарейка и почему помят корпус.")
+                }
+                if let error { Section("Не удалось прочитать журнал") { Text(error); Button("Повторить") { Task { await load() } } } }
+                if receipts.isEmpty && !loading && error == nil { Text("Дел пока нет. Начните экспедицию.") }
+                ForEach(receipts) { receipt in
+                    NavigationLink {
+                        DiveCaseView(journal: journal, diveID: receipt.id)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(receipt.date, style: .date) + Text(" · ") + Text(receipt.date, style: .time)
+                            Text(receipt.outcome)
+                            Text("Дело №\(receipt.id.uuidString.prefix(8))").font(.caption.monospaced())
+                        }
+                    }.accessibilityIdentifier("diveCase")
+                }
+                if loading { ProgressView("Открываем дела…") }
+                if hasMore && !loading && error == nil { Button("Ещё дела") { Task { await load() } } }
+            }
+            .navigationTitle("Бюро расследований")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }
+            .task { if receipts.isEmpty { await load() } }
+        }
+    }
+
+    @MainActor private func load() async {
+        guard !loading else { return }
+        loading = true
+        error = nil
+        defer { loading = false }
+        do {
+            let page = try await journal.receipts(offset: receipts.count)
+            receipts += page
+            hasMore = page.count == 50
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+struct ReceiptPaper: View {
+    let receipt: DiveReceipt
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("ПОДВОДНОЕ БЮРО РАССЛЕДОВАНИЙ").font(.headline)
+            Text("ЧЕК · \(receipt.id.uuidString.prefix(8))")
+            Text(receipt.date.formatted(date: .abbreviated, time: .standard))
+            Divider()
+            Text("Обнял риф — корпус помят: \(receipt.reefs)")
+            Text("Форсаж — батарейку списали: \(receipt.boosts) × 7 энергии")
+            Text(receipt.blackBoxes > 0 ? "Чёрный ящик — с собой" : "Чёрный ящик — не найден")
+            Divider()
+            Text(receipt.outcome).bold()
+            Text("Спасибо за погружение. Тревожность возврату не подлежит.")
+        }
+        .font(.system(.body, design: .monospaced))
+        .foregroundStyle(.black)
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(red: 0.98, green: 0.95, blue: 0.85), in: RoundedRectangle(cornerRadius: 4))
+        .accessibilityIdentifier("diveReceipt")
+    }
+}
+
+/// Used inline after every expedition, as well as inside the historical case.
+struct LatestReceiptView: View {
+    let journal: ExpeditionJournal
+    let diveID: UUID
+    @State private var receipt: DiveReceipt?
+    @State private var error: String?
+    var body: some View {
+        VStack {
+            if let receipt { ReceiptPaper(receipt: receipt) }
+            else if let error {
+                Text(error)
+                Button("Повторить печать чека") { Task { await load() } }
+            } else { ProgressView("Печатаем чек…") }
+        }
+        .task(id: diveID) { await load() }
+    }
+    @MainActor private func load() async {
+        do {
+            receipt = try await journal.receipts(diveID: diveID).first
+            error = receipt == nil ? "Чек пока недоступен" : nil
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct DiveCaseView: View {
+    let journal: ExpeditionJournal
+    let diveID: UUID
+    @State private var entries: [JournalEntry] = []
+    @State private var error: String?
+    @State private var loading = false
+    @State private var hasMore = true
+    var body: some View {
+        List {
+            LatestReceiptView(journal: journal, diveID: diveID)
+            Section("Хронология · события и приборы") {
+                ForEach(entries) { entry in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(String(format: "+%.1f с · %@", entry.elapsed, entry.severity)).font(.caption.monospaced())
+                        Text(entry.message).bold()
+                        Text(entry.kind).font(.caption.monospaced())
+                        Text(String(format: "Энергия %.1f · корпус %d/3 · груз %d", entry.boat.energy, entry.boat.hull, entry.boat.cargo))
+                        Text(String(format: "Координаты %.0f, %.0f · скорость %.1f", entry.boat.x, entry.boat.y, entry.boat.speed))
+                        Text("\(entry.boat.zone) · \(entry.boat.state) · щит: \(entry.boat.shield ? "да" : "нет") · ящик: \(entry.boat.blackBox ? "да" : "нет")")
+                    }.accessibilityElement(children: .combine)
+                }
+                if let error { Text(error); Button("Повторить") { Task { await load() } } }
+                if loading { ProgressView("Читаем журнал…") }
+                if hasMore && !loading && error == nil { Button("Ещё события") { Task { await load() } } }
+            }
+        }
+        .navigationTitle("Дело №\(diveID.uuidString.prefix(8))")
+        .task { if entries.isEmpty { await load() } }
+    }
+    @MainActor private func load() async {
+        guard !loading else { return }
+        loading = true
+        error = nil
+        defer { loading = false }
+        do {
+            let page = try await journal.entries(diveID: diveID, offset: entries.count)
+            entries += page
+            hasMore = page.count == 200
+        } catch { self.error = error.localizedDescription }
+    }
+}
 
 // MARK: - BlackBox.swift
 
@@ -876,9 +1690,84 @@ enum GameEvent: Equatable {
 
 @MainActor
 final class GameEngine: NSObject, ObservableObject {
+    private(set) var expeditionId: String?
+    private var journalTask: Task<Void, Never>?
+    private var lastSnapshotTime: Double = -1
+    private var lastSteeringTime: Double = -1
+    private var journalScreen = "Welcome"
+
+    func journal(_ type: String, _ extra: [String: String] = [:]) {
+        guard let id = expeditionId else { return }
+        var payload = journalState
+        payload.merge(extra) { _, new in new }
+        let prior = journalTask
+        journalTask = Task {
+            await prior?.value
+            await ExpeditionLogger.shared.log(expeditionId: id, type: type,
+                category: type == "snapshot" ? "State" : (type == "error" ? "Errors" : "Gameplay"),
+                severity: type == "error" ? "error" : "info", payload: payload)
+        }
+    }
+
+    private var journalState: [String: String] {
+        ["time": String(runElapsed), "x": String(Double(position.x)), "y": String(Double(position.y)),
+         "vx": String(Double(velocity.dx)), "vy": String(Double(velocity.dy)),
+         "heading": String(Double(atan2(velocity.dy, velocity.dx))), "energy": String(Double(energy)),
+         "hull": String(hull), "cargo": String(cargoValue), "samples": String(samples),
+         "blackBox": String(hasBlackBox), "shield": String(hasShield), "target": hasBlackBox ? "base" : "wreck",
+         "targetX": String(Double(target.x)), "targetY": String(Double(target.y)),
+         "zone": String(describing: zone), "width": String(Double(zone == .ocean ? level.size.width : Self.caveSize.width)),
+         "height": String(Double(zone == .ocean ? level.size.height : Self.caveSize.height)),
+         "pickups": pickups.filter { !$0.collected }.map { "\($0.id),\($0.kind.rawValue),\($0.position.x),\($0.position.y)" }.joined(separator: ";"),
+         "mines": mines.map { "\($0.id),\($0.phase),\($0.position.x),\($0.position.y),\($0.timer)" }.joined(separator: ";"),
+         "rocks": level.rocks.map { $0.vertices.map { "\($0.x),\($0.y)" }.joined(separator: ":") }.joined(separator: ";"),
+         "bossTime": String(bossTimeRemaining), "bossDefeated": String(bossDefeated),
+         "boost": String(boostRemaining), "sonar": String(sonarRemaining)]
+    }
+
+    func navigate(to screen: String, reason: String) {
+        guard screen != journalScreen else { return }
+        journal("navigation", ["fromScreen": journalScreen, "toScreen": screen, "reason": reason])
+        journalScreen = screen
+    }
+
+    func flushJournal() async {
+        await journalTask?.value
+        await ExpeditionLogger.shared.flush()
+    }
+
+    private func endJournal(result: String, reason: String) {
+        journal("end", ["result": result, "reason": reason])
+    }
+
+    private let receiptJournal: any ExpeditionLogging
+    private(set) var diveID: UUID?
+    private var journalOpen = false
+    private var nextSnapshot: TimeInterval = 5
+
+    private func log(_ kind: String, _ message: String, severity: String = "info") {
+        guard journalOpen, let diveID else { return }
+        receiptJournal.record(JournalEntry(id: UUID(), diveID: diveID, date: Date(), elapsed: runElapsed,
+            kind: kind, severity: severity, message: message,
+            boat: BoatSnapshot(x: Double(position.x), y: Double(position.y), energy: Double(energy),
+                hull: hull, cargo: cargoValue, blackBox: hasBlackBox, shield: hasShield,
+                zone: String(describing: zone), state: String(describing: state), speed: Double(speed))))
+    }
+
+    private func closeJournal(_ outcome: String, severity: String = "info") {
+        log("finish", outcome, severity: severity)
+        journalOpen = false
+        receiptJournal.flush()
+    }
+
     let events = PassthroughSubject<GameEvent, Never>()
     @Published private(set) var state: RunState = .ready {
-        didSet { if oldValue != state { events.send(.stateChanged(state)) } }
+        didSet {
+            if oldValue != state {
+                events.send(.stateChanged(state))
+                log("state", "Режим: \(state)")
+            }
+        }
     }
     private var dockingTooFast = false
     private var didWarnEnergy = false
@@ -958,6 +1847,7 @@ final class GameEngine: NSObject, ObservableObject {
     private static let fixedStep: TimeInterval = 1.0 / 120.0
 
     init(defaults: UserDefaults = .standard, level: OceanLevel = .expedition,
+         journal: any ExpeditionLogging = ExpeditionJournal.shared,
          randomValue: @escaping () -> Double = { Double.random(in: 0..<1) }) {
         var saved = GarageSave()
         if let data = defaults.data(forKey: Self.garageKey) {
@@ -968,6 +1858,7 @@ final class GameEngine: NSObject, ObservableObject {
         saved.unlocked.insert(.classic)
         if !saved.unlocked.contains(saved.selected) { saved.selected = .classic }
         garage = saved
+        self.receiptJournal = journal
         self.defaults = defaults
         self.level = level
         self.randomValue = randomValue
@@ -1118,6 +2009,11 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func startGame() {
+        if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "restart") }
+        expeditionId = UUID().uuidString
+        lastSnapshotTime = -1
+        lastSteeringTime = -1
+        closeJournal("Экспедиция прервана: начато новое погружение")
         didWarnEnergy = false
         summaryTicks = 0
         zone = .ocean
@@ -1157,12 +2053,23 @@ final class GameEngine: NSObject, ObservableObject {
         previousTimestamp = nil
         announcedCriticalHull = false
         announcedDockingHint = false
+        diveID = UUID()
+        state = .playing
+        journalOpen = true
+        nextSnapshot = 5
+        log("start", "Дело открыто: экспедиция за чёрным ящиком")
         announce(A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
         updateCamera(dt: 1, snap: true)
         state = .playing
+        journal("start")
+        navigate(to: "Game", reason: "start")
+        journal("snapshot")
     }
 
     func returnToMenu() {
+        navigate(to: "Welcome", reason: "surface")
+        if state == .playing || state == .paused { endJournal(result: "abandoned", reason: "surface") }
+        closeJournal("Экспедиция прервана: возвращение в меню")
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -1177,6 +2084,15 @@ final class GameEngine: NSObject, ObservableObject {
         switch requestedState {
         case "playing": startGame()
         case "paused", "map": startGame(); pause()
+        case "journal":
+            startGame()
+            setSteering(CGVector(dx: 1, dy: 0))
+            for _ in 0..<60 { step(deltaTime: 0.1) }
+            activateSonar()
+            for _ in 0..<60 { step(deltaTime: 0.1) }
+            hasBlackBox = true
+            journal("blackBox")
+            finish(success: true)
         case "completed":
             startGame()
             hasBlackBox = true
@@ -1191,14 +2107,23 @@ final class GameEngine: NSObject, ObservableObject {
 #endif
 
     func setSteering(_ vector: CGVector) {
-        guard state == .playing, vector.dx.isFinite, vector.dy.isFinite else { return }
+        guard vector.dx.isFinite, vector.dy.isFinite else { journal("error", ["message": "nonfinite steering"]); log("input.invalid", "Некорректная команда руля", severity: "error"); return }
+        guard state == .playing else { return }
         let wasSteering = hypot(steering.dx, steering.dy) > 0
+        let wasMoving = inputStrength > 0
         accessibilityMoveRemaining = 0
+        if runElapsed - lastSteeringTime >= 0.25 || vector == .zero {
+            lastSteeringTime = runElapsed
+            journal("steering", ["dx": String(Double(vector.dx)), "dy": String(Double(vector.dy))])
+        }
         let length = hypot(vector.dx, vector.dy)
         if length < 0.08 { steering = .zero }
         else { steering = CGVector(dx: vector.dx / max(1, length), dy: vector.dy / max(1, length)) }
         let isSteering = hypot(steering.dx, steering.dy) > 0
         if wasSteering != isSteering { events.send(.diagnostic(.info, .control, "steering", ["active": String(isSteering)])) }
+        if wasMoving != (inputStrength > 0) {
+            log("steering", inputStrength > 0 ? "Включена тяга" : "Руль отпущен: торможение")
+        }
         objectWillChange.send()
     }
 
@@ -1212,12 +2137,14 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateBoost() {
-        guard canBoost else { events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Boost", "reason": state != .playing ? "state" : boostCooldown > 0 ? "cooldown" : "energy"])); return }
+        guard canBoost else { log("ability.rejected", "Форсаж недоступен: заряд или перезарядка", severity: "warning"); journal("error", ["message": "boost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Boost", "reason": state != .playing ? "state" : boostCooldown > 0 ? "cooldown" : "energy"])); return }
+        defer { journal("boost") }
         let length = inputStrength
         boostDirection = length > 0.08
             ? CGVector(dx: steering.dx / length, dy: steering.dy / length)
             : CGVector(dx: facing, dy: 0)
         energy -= Self.boostCost
+        log("boost", "Форсаж — батарейку списали: −7 энергии")
         checkEnergyWarning()
         boostRemaining = 1.1
         boostCooldown = 4.5
@@ -1226,9 +2153,11 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateSonar() {
-        guard canSonar else { events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Sonar", "reason": state != .playing ? "state" : sonarCooldown > 0 ? "cooldown" : "energy"])); return }
+        guard canSonar else { log("ability.rejected", "Сонар недоступен", severity: "warning"); journal("error", ["message": "sonar unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "Sonar", "reason": state != .playing ? "state" : sonarCooldown > 0 ? "cooldown" : "energy"])); return }
+        defer { journal("sonar") }
         sonarRemaining = 5
         sonarCooldown = 8
+        log("sonar", "Сонар: поиск находок")
         revealNearby(radius: 680)
         if let portal, hypot(position.x - portal.position.x, position.y - portal.position.y) < 680 {
             portalRevealed = true
@@ -1240,8 +2169,10 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func activateLightBoost() {
-        guard canLightBoost else { events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "LightBoost", "reason": state != .playing ? "state" : lightBoostCooldown > 0 ? "cooldown" : "energy"])); return }
+        guard canLightBoost else { log("ability.rejected", "Усилитель фар недоступен", severity: "warning"); journal("error", ["message": "lightBoost unavailable"]); events.send(.diagnostic(.warning, .control, "ability.denied", ["ability": "LightBoost", "reason": state != .playing ? "state" : lightBoostCooldown > 0 ? "cooldown" : "energy"])); return }
+        defer { journal("lightBoost") }
         energy -= Self.lightBoostCost
+        log("light", "Усилены фары: −5 энергии")
         checkEnergyWarning()
         lightBoostRemaining = Self.lightBoostDuration
         lightBoostCooldown = Self.lightBoostRecharge
@@ -1259,11 +2190,16 @@ final class GameEngine: NSObject, ObservableObject {
         sectorOverview
     }
 
-    func pause() {
+    func pause() { pauseForScreen("Pause") }
+
+    func pauseForScreen(_ screen: String) {
         guard state == .playing else { return }
         steering = .zero
         accessibilityMoveRemaining = 0
         state = .paused
+        journal("pause")
+        navigate(to: screen, reason: screen == "Map" ? "openMap" : "pause")
+        receiptJournal.flush()
         accumulator = 0
         previousTimestamp = nil
     }
@@ -1275,6 +2211,8 @@ final class GameEngine: NSObject, ObservableObject {
             accumulator = 0
             previousTimestamp = nil
             state = .playing
+            journal("resume")
+            navigate(to: "Game", reason: "resume")
         } else { pause() }
     }
 
@@ -1294,7 +2232,11 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     func step(deltaTime raw: TimeInterval) {
-        guard raw.isFinite, raw > 0, state == .playing || state == .ready else { return }
+        guard raw.isFinite, raw > 0 else {
+            log("simulation.invalidDelta", "Некорректный шаг симуляции", severity: "error")
+            return
+        }
+        guard state == .playing || state == .ready else { return }
         let dt = min(raw, 0.1)
         if state == .playing {
             accumulator += dt
@@ -1303,7 +2245,15 @@ final class GameEngine: NSObject, ObservableObject {
                 accumulator = max(0, accumulator - Self.fixedStep)
             }
         }
+        if journalOpen && runElapsed >= nextSnapshot {
+            log("snapshot", "Показания приборов")
+            nextSnapshot = runElapsed + 5
+        }
         elapsed += dt
+        if state == .playing, runElapsed - lastSnapshotTime >= 1 {
+            lastSnapshotTime = runElapsed
+            journal("snapshot")
+        }
     }
 
     func current(at point: CGPoint) -> CGVector {
@@ -1390,6 +2340,7 @@ final class GameEngine: NSObject, ObservableObject {
     private func checkEnergyWarning() {
         if energy <= 25 && !didWarnEnergy {
             didWarnEnergy = true
+            log("energy.low", "Осталось менее 25% энергии", severity: "warning")
             events.send(.energyLow)
         }
     }
@@ -1436,7 +2387,7 @@ final class GameEngine: NSObject, ObservableObject {
                 if impact < 0 {
                     velocity.dx -= hit.normal.dx * impact * 1.12
                     velocity.dy -= hit.normal.dy * impact * 1.12
-                    if -impact > 78 { takeDamage(); boostRemaining = 0 }
+                    if -impact > 78 { journal("collision", ["rock": String(rock.id)]); takeDamage(source: "reef"); boostRemaining = 0 }
                 }
             }
         }
@@ -1456,6 +2407,7 @@ final class GameEngine: NSObject, ObservableObject {
             switch mines[index].phase {
             case .idle:
                 if distance < OceanMine.triggerRadius {
+                    journal("mine", ["id": String(mines[index].id), "phase": "armed"])
                     mines[index].phase = .armed
                     mines[index].timer = OceanMine.fuse
                     announce(A11yL10n.text("event.mine", defaultValue: "Мина активирована — отойди!"), duration: 1.5, urgent: true)
@@ -1463,10 +2415,12 @@ final class GameEngine: NSObject, ObservableObject {
             case .armed:
                 mines[index].timer -= delta
                 if mines[index].timer <= 0 {
+                    journal("mine", ["id": String(mines[index].id), "phase": "exploding"])
                     mines[index].phase = .exploding
                     mines[index].timer = 0.65
+                    log("mine.explosion", "Взорвалась мина \(mines[index].id)", severity: "warning")
                     if distance < OceanMine.blastRadius + Self.hullRadius {
-                        takeDamage()
+                        takeDamage(source: "mine")
                         let length = max(1, distance)
                         velocity.dx += (position.x - mines[index].position.x) / length * 110
                         velocity.dy += (position.y - mines[index].position.y) / length * 110
@@ -1499,6 +2453,8 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func updatePortal() {
+        let oldZone = zone
+        defer { if oldZone != zone { journal("zone") } }
         guard let portal,
               hypot(portal.position.x - position.x, portal.position.y - position.y) < 48 else { return }
         portalReturnPosition = position
@@ -1509,6 +2465,7 @@ final class GameEngine: NSObject, ObservableObject {
         velocity = .zero
         steering = .zero
         boostRemaining = 0
+        log("portal.enter", "Вход в пещеру спрута")
         bossTimeRemaining = Self.bossDuration
         bossStrikeCooldown = 1.6
         bossStrike = nil
@@ -1531,7 +2488,7 @@ final class GameEngine: NSObject, ObservableObject {
                     strike.phase = .impact
                     strike.timer = 0.55
                     if hypot(strike.position.x - position.x, strike.position.y - position.y) < 112 + Self.hullRadius {
-                        takeDamage()
+                        takeDamage(source: "tentacle")
                         velocity.dx += position.x < strike.position.x ? -125 : 125
                         velocity.dy += position.y < strike.position.y ? -95 : 95
                         boostRemaining = 0
@@ -1556,6 +2513,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func completeBossCave() {
+        defer { journal("bossCompleted") }
         bossDefeated = true
         bossReward = 300
         bossStrike = nil
@@ -1564,21 +2522,26 @@ final class GameEngine: NSObject, ObservableObject {
         accessibilityMoveRemaining = 0
         velocity = .zero
         steering = .zero
+        log("boss.reward", "Спрут побеждён: артефакт +300")
         invulnerability = 1
         eventCount += 1
         announce(A11yL10n.text("event.boss.complete", defaultValue: "Спрут отступил! Артефакт пещеры добавил 300 к добыче."), duration: 6)
         updateCamera(dt: 1, snap: true)
     }
 
-    private func takeDamage() {
+    private func takeDamage(source: String) {
         guard invulnerability <= 0, state == .playing else { return }
         invulnerability = 1.4
         damageCount += 1
         if hasShield {
             hasShield = false
+            journal("damage", ["absorbed": "shield"])
+            log("shield.hit", "Щит поглотил удар: \(source)", severity: "warning")
             announce(A11yL10n.text("event.shield.hit", defaultValue: "Щит поглотил удар"), duration: 2, urgent: true)
         } else {
             hull -= 1
+            journal("damage")
+            log("\(source).damage", source == "reef" ? "Обнял риф — корпус помят" : "Повреждение корпуса: \(source)", severity: "warning")
             announce(A11yL10n.format("event.hull.damage.format", defaultValue: "Корпус повреждён. %lld из 3", Int64(hull)),
                      duration: 2, urgent: true)
             if hull <= 0 { finish(success: false, reason: .hull) }
@@ -1592,6 +2555,7 @@ final class GameEngine: NSObject, ObservableObject {
             if pickup.kind == .battery && energy > 97 { continue }
             if pickup.kind == .shield && hasShield { continue }
             pickups[index].collected = true
+            defer { journal(pickup.kind == .blackBox ? "blackBox" : "pickup", ["kind": pickup.kind.rawValue, "id": String(pickup.id)]) }
             pickupCount += 1
             switch pickup.kind {
             case .crystal:
@@ -1609,9 +2573,11 @@ final class GameEngine: NSObject, ObservableObject {
                 announce(A11yL10n.text("event.sample", defaultValue: "Образец на борту. Плюс 75 к добыче"))
             case .blackBox:
                 hasBlackBox = true
+                journal("target", ["newTarget": "base"])
                 events.send(.objectiveChanged(true))
                 announce(A11yL10n.text("event.blackbox", defaultValue: "Чёрный ящик найден. Вернись на базу!"), duration: 6)
             }
+            log("pickup.\(pickup.kind.rawValue)", pickup.kind == .blackBox ? "Чёрный ящик — с собой" : "Подобрано: \(pickup.kind.rawValue), №\(pickup.id)")
         }
     }
 
@@ -1664,6 +2630,7 @@ final class GameEngine: NSObject, ObservableObject {
     }
 
     private func announce(_ text: String, duration: TimeInterval = 3, urgent: Bool = false) {
+        log("notice", text, severity: urgent ? "warning" : "info")
         events.send(urgent ? .danger(text) : .speak(text))
         notice = text
         noticeRemaining = duration
@@ -1690,6 +2657,12 @@ final class GameEngine: NSObject, ObservableObject {
 
     private func finish(success: Bool, reason: FailureReason = .hull) {
         guard state == .playing else { return }
+        defer {
+            if success { journal("docking") }
+            journal(success ? "completed" : "gameOver")
+            navigate(to: "Result", reason: success ? "completed" : "gameOver")
+            endJournal(result: success ? "completed" : "gameOver", reason: success ? "docking" : String(describing: reason))
+        }
         steering = .zero
         velocity = .zero
         accessibilityMoveRemaining = 0
@@ -1704,11 +2677,13 @@ final class GameEngine: NSObject, ObservableObject {
                 defaults.set(score, forKey: Self.bestKey)
             }
             state = .completed
+            closeJournal("Чёрный ящик доставлен. Добыча: \(score)")
         } else {
             if reason == .energy { events.send(.danger(A11yL10n.text("event.energy.empty", defaultValue: "Энергия закончилась"))) }
             failureReason = reason
             score = 0
             state = .gameOver
+            closeJournal(reason == .energy ? "Энергия закончилась. Добыча потеряна" : "Корпус разрушен. Добыча потеряна", severity: "error")
         }
     }
 
@@ -2499,7 +3474,7 @@ struct ContentView: View {
     @StateObject private var engine: GameEngine
     @StateObject private var recorder: BlackBoxRecorder
     @StateObject private var captain = CaptainNote()
-    @State private var showingJournal = false
+    @State private var showingBlackBox = false
     @StateObject private var announcer: VoiceOverAnnouncer
     @AccessibilityFocusState private var focusedControl: String?
     @Environment(\.scenePhase) private var scenePhase
@@ -2509,6 +3484,9 @@ struct ContentView: View {
     @State private var showingMap = false
     @AppStorage("podlodkaDive.nightExpedition") private var nightExpedition = false
     @State private var showingGarage = false
+    @State private var showingJournal = false
+    @State private var showingReplay = false
+    @State private var showingBureau = false
     @State private var pendingStyle: SubmarineStyle?
     @State private var garageMessage = ""
 
@@ -2582,8 +3560,18 @@ struct ContentView: View {
         .onChange(of: voiceOverEnabled) { _, _ in engine.setSteering(.zero) }
         .onChange(of: voiceOverButtons) { _, _ in engine.setSteering(.zero) }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { captain.finish(recorder: recorder); engine.pause(); recorder.background() }
+            if phase != .active {
+                captain.finish(recorder: recorder)
+                engine.pause()
+                let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Expedition flush")
+                Task {
+                    await engine.flushJournal()
+                    await recorder.drain()
+                    if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask) }
+                }
+            }
         }
+        .onChange(of: showingMap) { _, visible in engine.navigate(to: visible ? "Map" : (engine.state == .playing ? "Game" : "Pause"), reason: visible ? "openMap" : "closeMap") }
         .sensoryFeedback(.selection, trigger: engine.pickupCount)
         .sensoryFeedback(.error, trigger: engine.damageCount)
         .sensoryFeedback(.warning, trigger: engine.eventCount)
@@ -2603,17 +3591,26 @@ struct ContentView: View {
             focusedControl = destination
             if showingMap { announcer.describeMap() }
         }
+        .onChange(of: showingGarage) { _, visible in engine.navigate(to: visible ? "Garage" : "Welcome", reason: visible ? "openGarage" : "closeGarage") }
+        .onChange(of: showingJournal) { _, visible in engine.navigate(to: visible ? "Journal" : journalReturnScreen, reason: visible ? "openJournal" : "closeJournal") }
+        .onChange(of: showingReplay) { _, visible in engine.navigate(to: visible ? "Replay" : journalReturnScreen, reason: visible ? "openReplay" : "closeReplay") }
         .sheet(isPresented: $showingGarage) { garagePanel }
-        .sheet(isPresented: $showingJournal) { BlackBoxJournal() }
+        .sheet(isPresented: $showingJournal) { ExpeditionJournalView() }
+        .sheet(isPresented: $showingReplay) {
+            if let id = engine.expeditionId {
+                NavigationStack {
+                    ExpeditionReplayView(expeditionId: id)
+                        .toolbar { Button("Закрыть") { showingReplay = false } }
+                }
+            }
+        }
+        .sheet(isPresented: $showingBlackBox) { BlackBoxJournal() }
         .onChange(of: showingMap) { _, value in recorder.flow(value ? "map" : String(describing: engine.state)) }
         .onChange(of: showingGarage) { _, value in recorder.flow(value ? "garage" : "ready") }
-        .onChange(of: showingJournal) { _, value in recorder.flow(value ? "journal" : String(describing: engine.state)) }
+        .onChange(of: showingBlackBox) { _, value in recorder.flow(value ? "journal" : String(describing: engine.state)) }
         .onChange(of: engine.state) { _, state in if state != .playing { captain.finish(recorder: recorder) } }
         .overlay(alignment: .bottom) {
-            if engine.state == .ready || engine.state == .completed || engine.state == .gameOver {
-                Button("journal.title") { Task { await recorder.drain(); showingJournal = true } }
-                    .buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.black).padding(.bottom, 16).accessibilityIdentifier("openJournal")
-            } else if engine.state == .playing {
+            if engine.state == .playing {
                 VStack {
                     if captain.recording { Text(captain.text).font(.caption).lineLimit(3) }
                     if let error = captain.error { Text(error).font(.caption) }
@@ -2623,7 +3620,23 @@ struct ContentView: View {
                 }.padding(.bottom, 8)
             }
         }
+        .sheet(isPresented: $showingBureau) { BureauView(journal: .shared) }
 
+    }
+
+    private var journalReturnScreen: String {
+        switch engine.state {
+        case .ready: "Welcome"
+        case .playing: "Game"
+        case .paused: showingMap ? "Map" : "Pause"
+        case .completed, .gameOver: "Result"
+        }
+    }
+
+    private var journalButton: some View {
+        Button("Журнал экспедиций") {
+            Task { await engine.flushJournal(); showingJournal = true }
+        }.accessibilityIdentifier("openJournal").padding(8)
     }
 
     private func largeTextInstruments(insets: EdgeInsets) -> some View {
@@ -2656,6 +3669,7 @@ struct ContentView: View {
 
     private func welcome(size: CGSize, insets: EdgeInsets) -> some View {
         VStack(spacing: 0) {
+            journalButton
             (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())) {
                 brand
                 Spacer()
@@ -2706,6 +3720,7 @@ struct ContentView: View {
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
+                bureauButton
                 Button {
                     garageMessage = ""
                     showingGarage = true
@@ -2927,7 +3942,7 @@ struct ContentView: View {
     }
 
     private func openMap() {
-        engine.pause()
+        engine.pauseForScreen("Map")
         showingMap = true
     }
 
@@ -3095,6 +4110,17 @@ struct ContentView: View {
         Label(text, systemImage: icon).font(.system(.body)).foregroundStyle(color)
     }
 
+    private var bureauButton: some View {
+        Button { showingBureau = true } label: {
+            Label("Подводное бюро расследований", systemImage: "doc.text.magnifyingglass")
+                .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(OceanPalette.white)
+        .background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier("openBureau")
+    }
+
     private var resultPanel: some View {
         let paused = engine.state == .paused
         let success = engine.state == .completed
@@ -3131,7 +4157,16 @@ struct ContentView: View {
                            accessibilityTitle: A11yL10n.text("a11y.best.label", defaultValue: "Лучшая добыча"), highlighted: false)
             }
             .padding(.vertical, 16).background(OceanPalette.teal.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
+            if !paused, let diveID = engine.diveID {
+                LatestReceiptView(journal: .shared, diveID: diveID)
+            }
+            bureauButton
             VStack(spacing: 12) {
+                journalButton
+                if !paused {
+                    Button("Реплей") { Task { await engine.flushJournal(); showingReplay = true } }
+                        .accessibilityIdentifier("resultReplay")
+                }
                 Button {
                     if paused { engine.togglePause() } else { engine.startGame() }
                 } label: {

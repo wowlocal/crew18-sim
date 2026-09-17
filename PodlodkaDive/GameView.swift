@@ -18,6 +18,7 @@ struct GameView: View {
     @State private var showingGarage = false
     @State private var showingJournal = false
     @State private var showingReplay = false
+    @State private var showingBureau = false
     @State private var pendingStyle: SubmarineStyle?
     @State private var garageMessage = ""
 
@@ -151,6 +152,7 @@ struct GameView: View {
                 }.padding(.bottom, 8)
             }
         }
+        .sheet(isPresented: $showingBureau) { BureauView(journal: .shared) }
 
     }
 
@@ -250,6 +252,7 @@ struct GameView: View {
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
+                bureauButton
                 Button {
                     garageMessage = ""
                     showingGarage = true
@@ -639,6 +642,17 @@ struct GameView: View {
         Label(text, systemImage: icon).font(.system(.body)).foregroundStyle(color)
     }
 
+    private var bureauButton: some View {
+        Button { showingBureau = true } label: {
+            Label("Подводное бюро расследований", systemImage: "doc.text.magnifyingglass")
+                .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(OceanPalette.white)
+        .background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier("openBureau")
+    }
+
     private var resultPanel: some View {
         let paused = engine.state == .paused
         let success = engine.state == .completed
@@ -675,6 +689,10 @@ struct GameView: View {
                            accessibilityTitle: A11yL10n.text("a11y.best.label", defaultValue: "Лучшая добыча"), highlighted: false)
             }
             .padding(.vertical, 16).background(OceanPalette.teal.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
+            if !paused, let diveID = engine.diveID {
+                LatestReceiptView(journal: .shared, diveID: diveID)
+            }
+            bureauButton
             VStack(spacing: 12) {
                 journalButton
                 if !paused {

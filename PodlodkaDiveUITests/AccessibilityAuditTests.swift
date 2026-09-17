@@ -29,6 +29,26 @@ final class AccessibilityAuditTests: XCTestCase {
     }
 
     @MainActor
+    func testReceiptAndArchivedCaseSurviveRelaunch() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-accessibilityAuditState", "completed"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["diveReceipt"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        let bureau = app.buttons["openBureau"]
+        XCTAssertTrue(bureau.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !bureau.isHittable { app.swipeUp() }
+        bureau.tap()
+        let archivedCase = app.buttons["diveCase"].firstMatch
+        XCTAssertTrue(archivedCase.waitForExistence(timeout: 5))
+        archivedCase.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["diveReceipt"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Чёрный ящик доставлен. Добыча: 750"].firstMatch.exists)
+    }
+
+    @MainActor
     func testMenuGameMapPauseAndGarageNavigation() {
         // given
         let app = XCUIApplication()
