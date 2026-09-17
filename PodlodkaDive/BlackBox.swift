@@ -166,7 +166,7 @@ actor BlackBox {
         }
     }
     func log(_ level: BlackBoxLevel = .info, _ category: BlackBoxCategory, _ message: String,
-             attrs: [String: String] = [:], runID: UUID, t: TimeInterval) async {
+             attrs: [String: String] = [:], runID: UUID, t: TimeInterval, eventID: UUID = UUID()) async {
         await recover(); sequence += 1
         if level == .error { output.error("\(message, privacy: .public) \(attrs.description)") }
         if buffer.count >= 512 {
@@ -174,7 +174,7 @@ actor BlackBox {
             else if level == .debug || message == "snapshot" { return }
             // Critical events are retained even when storage is unavailable. The cap is soft for them.
         }
-        buffer.append(BlackBoxEntry(runID: runID, seq: sequence, t: t, wallTime: now(), level: level, category: category, message: message, attrs: attrs))
+        buffer.append(BlackBoxEntry(id: eventID, runID: runID, seq: sequence, t: t, wallTime: now(), level: level, category: category, message: message, attrs: attrs))
         if buffer.count >= 64 { await flush() }
     }
     func flush() async {

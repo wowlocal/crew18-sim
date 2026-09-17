@@ -4,6 +4,11 @@ import Combine
 
 struct GameView: View {
     @StateObject private var recovery: ExpeditionRecovery
+    @State private var appliedLaunchRoutes = false
+    @State private var routeGeneration = UUID()
+    @State private var routedRun: UUID?
+    @State private var showingRoutedRun = false
+    @State private var routeReader: BlackBoxReader?
     @State private var showingEvents = false
     @State private var confirmNewGame = false
     @StateObject private var engine: GameEngine
@@ -92,13 +97,37 @@ struct GameView: View {
                     engine.prepareAccessibilityAuditState(arguments[marker + 1])
                 }
 #endif
+                NavigationCoordinator.shared.connect { route, event in handleRoute(route, eventID: event) }
                 ReturnInbox.shared.connect { url, event in openReturnURL(url, eventID: event) }
+#if DEBUG
+                if !appliedLaunchRoutes {
+                    appliedLaunchRoutes = true
+                if arguments.contains("-returnBriefingAudit") {
+                    engine.startGame(); engine.returnToMenu()
+                    NavigationCoordinator.shared.receive(.continueExpedition)
+                }
+                if let marker = arguments.firstIndex(of: "-routeAudit"), arguments.indices.contains(marker + 1),
+                   let url = URL(string: arguments[marker + 1]) { openReturnURL(url) }
+                }
+#endif
                 if engine.state != .ready { engine.startLoop() }
             }
             .onDisappear { engine.stopLoop() }
             .onChange(of: proxy.size) { _, size in engine.resize(to: size) }
         }
         .onOpenURL { openReturnURL($0) }
+        .fullScreenCover(isPresented: Binding(get: { recovery.briefing != nil }, set: { _ in })) {
+            if let snapshot = recovery.briefing {
+                CaptainBriefing(engine: engine, snapshot: snapshot, now: recovery.currentDate,
+                    resume: { recovery.finishBriefing(restart: false) }, restart: { recovery.finishBriefing(restart: true) })
+            }
+        }
+        .sheet(isPresented: $showingRoutedRun) {
+            NavigationStack {
+                JournalTimeline(reader: routeReader, runID: routedRun)
+                    .toolbar { Button("Готово") { showingRoutedRun = false } }
+            }
+        }
         .sheet(isPresented: $showingEvents, onDismiss: { focusedControl = "surfaceMenu" }) {
             ReturnEventsView(recovery: recovery) { openReturnURL($0) }
         }
@@ -196,6 +225,14 @@ struct GameView: View {
     }
 
     private func openReturnURL(_ url: URL, eventID: UUID? = nil) {
+        guard let route = DeepLinkParser.parse(url) else { recovery.open(url); return }
+        NavigationCoordinator.shared.receive(route, eventID: eventID)
+    }
+
+    private func handleRoute(_ route: AppRoute, eventID: UUID? = nil) {
+        if case .postpone(let id) = route { recovery.snooze(id); return }
+        routeGeneration = UUID()
+        showingRoutedRun = false
         showingMap = false
         showingCampaign = false
         showingSettings = false
@@ -209,7 +246,28 @@ struct GameView: View {
         showingCaptainJournal = false
         showingBlackBox = false
         showingCrewJournal = false
-        recovery.open(url, pushEventID: eventID)
+        switch route {
+        case .expedition(let id), .briefing(let id): recovery.open(ReturnRoute(id: id).url, pushEventID: eventID)
+        case .continueExpedition:
+            if let id = recovery.savedID { recovery.open(ReturnRoute(id: id).url) }
+            else { engine.returnToMenu() }
+        case .postpone: break
+        case .events: engine.pause(); showingEvents = true
+        case .campaign(let mission):
+            engine.pause()
+            if engine.state == .ready { _ = engine.selectMission(mission) }
+            showingCampaign = true
+        case .journal(nil): engine.pause(); showingArchives = true
+        case .journal(.some(let id)), .blackBox(let id):
+            engine.pause()
+            let token = routeGeneration
+            Task { @MainActor in
+                let reader = await BlackBox.shared.reader()
+                guard token == routeGeneration else { return }
+                routeReader = reader
+                routedRun = id; showingRoutedRun = true
+            }
+        }
     }
 
     private var journalReturnScreen: String {
@@ -235,7 +293,7 @@ struct GameView: View {
     }
 
     private var journalButton: some View {
-        Button { showingArchives = true } label: {
+        Button { NavigationCoordinator.shared.receive(.journal(nil)) } label: {
             Label("Журналы экспедиции", systemImage: "books.vertical")
                 .font(.body).foregroundStyle(Color.white)
                 .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
@@ -310,7 +368,7 @@ struct GameView: View {
                     .font(.system(.headline, design: .monospaced)).foregroundStyle(.white)
                 Spacer()
                 Menu {
-                    Button("События", systemImage: "clock.arrow.circlepath") { showingEvents = true }
+                    Button("События", systemImage: "clock.arrow.circlepath") { NavigationCoordinator.shared.receive(.events) }
                         .accessibilityIdentifier("openEvents")
                     Button("Гараж", systemImage: "wrench.and.screwdriver") {
                         garageMessage = ""

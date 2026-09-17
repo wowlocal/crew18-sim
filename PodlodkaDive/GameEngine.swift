@@ -1775,6 +1775,8 @@ private final class DisplayLinkTarget: NSObject {
 
 struct ExpeditionSnapshot: Codable {
     var version = 1
+    var schemaVersion: Int? = 2
+    var savedAt: Date? = nil
     var id: UUID
     var level: OceanLevel
     var position: CGPoint
