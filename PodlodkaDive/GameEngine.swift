@@ -907,7 +907,7 @@ final class GameEngine: NSObject, ObservableObject {
         logWatch("mission.start", mission?.briefing ?? "Экспедиция за чёрным ящиком")
         if mission != nil { events.send(.diagnostic(.info, .event, "mission.start", missionMetadata)) }
         log("Экспедиция началась", phrase: "Капитан: погружаемся!")
-        announce(mission.map { $0.briefing + " " + $0.hint }
+        announce(mission.map { _ in objectiveText }
                  ?? A11yL10n.text("event.start", defaultValue: "Найди чёрный ящик. Сохрани заряд на возвращение."), duration: 7)
         updateCamera(dt: 1, snap: true)
         journal("start")
