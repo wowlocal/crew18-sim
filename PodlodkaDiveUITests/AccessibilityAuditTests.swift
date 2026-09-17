@@ -95,6 +95,8 @@ final class AccessibilityAuditTests: XCTestCase {
         XCTAssertTrue(app.buttons["startDive"].waitForExistence(timeout: 5))
 
         // when / then: starting and changing the mission require no scrolling.
+        XCTAssertFalse(app.staticTexts["savedExpeditionStatus"].exists)
+        XCTAssertFalse(app.buttons["continueExpedition"].exists)
         XCTAssertTrue(app.buttons["startDive"].isHittable)
         XCTAssertTrue(app.buttons["openCampaign"].isHittable)
         XCTAssertFalse(app.buttons["openJournal"].exists)
@@ -308,7 +310,10 @@ extension AccessibilityAuditTests {
         let resume = app.buttons["continueExpedition"]
         XCTAssertTrue(resume.waitForExistence(timeout: 5))
         for _ in 0..<6 where !resume.isHittable { app.swipeUp() }
-        XCTAssertFalse(resume.label.isEmpty)
+        XCTAssertEqual(resume.label, "Продолжить сохранённую экспедицию")
+        XCTAssertEqual(app.staticTexts["savedExpeditionStatus"].label,
+                       "Экспедиция сохранена. Игра откроется на паузе.")
+        try app.performAccessibilityAudit()
         app.buttons["surfaceMenu"].tap()
         app.buttons["openEvents"].tap()
         XCTAssertTrue(app.navigationBars["События"].waitForExistence(timeout: 5))
@@ -322,5 +327,6 @@ extension AccessibilityAuditTests {
         app.launchArguments = []
         app.launch()
         XCTAssertTrue(app.buttons["continueExpedition"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["savedExpeditionStatus"].exists)
     }
 }

@@ -355,10 +355,18 @@ struct GameView: View {
                 .accessibilityIdentifier("openCampaign")
                 .accessibilityHint("Выбрать другую экспедицию и прочитать задание")
                 if let id = recovery.savedID {
+                    Text("Экспедиция сохранена. Игра откроется на паузе.")
+                        .font(.body).foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
+                        .accessibilityIdentifier("savedExpeditionStatus")
                     Button { openReturnURL(ReturnRoute(id: id).url) } label: {
                         HStack { Spacer(); Text("Продолжить"); Spacer(); Image(systemName: "play.fill") }
                     }
                         .buttonStyle(DiveButtonStyle()).accessibilityIdentifier("continueExpedition")
+                        .accessibilityLabel("Продолжить сохранённую экспедицию")
                         .accessibilityHint("Восстанавливает незавершённую экспедицию на паузе")
                 }
                 Button {
@@ -769,7 +777,12 @@ struct GameView: View {
                         _ = engine.selectMission(next)
                         showingCampaign = true
                     } label: {
-                        Text("Следующая экспедиция").frame(maxWidth: .infinity, minHeight: 48)
+                        HStack {
+                            Spacer()
+                            Text("Следующая экспедиция")
+                            Spacer()
+                            Image(systemName: "arrow.right").accessibilityHidden(true)
+                        }
                     }
                     .buttonStyle(DiveButtonStyle()).accessibilityIdentifier("nextMission")
                 }
