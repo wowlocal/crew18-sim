@@ -2,6 +2,41 @@ import XCTest
 
 final class AccessibilityAuditTests: XCTestCase {
     @MainActor
+    func testReminderPreviewIsAccessibleWithoutASave() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-accessibilityAuditState", "readyClean"]
+        app.launch()
+        app.buttons["surfaceMenu"].tap()
+        app.buttons["openEvents"].tap()
+        XCTAssertTrue(app.staticTexts["Нет запланированных напоминаний для сохранённой экспедиции."].waitForExistence(timeout: 5))
+        let regularHeight = app.staticTexts["Нет запланированных напоминаний для сохранённой экспедиции."].frame.height
+        let regularButtonHeight = app.buttons["Обновить напоминания"].frame.height
+        app.buttons["Обновить напоминания"].tap()
+        XCTAssertTrue(app.staticTexts["Нет запланированных напоминаний для сохранённой экспедиции."].exists)
+        // iOS 26.5 reports Dynamic Type warnings for List rows in this audit.
+        // Verify real text and button growth at AX XXXL below instead.
+        try app.performAccessibilityAudit(for: .all.subtracting(.dynamicType)) { issue in
+            print("Reminder audit: \(issue.detailedDescription): \(issue.element?.debugDescription ?? "No element")")
+            return false
+        }
+        app.buttons["closeEvents"].tap()
+        XCTAssertTrue(app.buttons["startDive"].exists)
+        app.terminate()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        app.buttons["surfaceMenu"].tap()
+        app.buttons["openEvents"].tap()
+        let message = app.staticTexts["Нет запланированных напоминаний для сохранённой экспедиции."]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(message.frame.height, regularHeight)
+        let refresh = app.buttons["Обновить напоминания"]
+        for _ in 0..<5 where !refresh.exists || !refresh.isHittable { app.swipeUp() }
+        XCTAssertTrue(refresh.isHittable)
+        XCTAssertGreaterThan(refresh.frame.height, regularButtonHeight)
+        refresh.tap()
+    }
+
+    @MainActor
     func testCaptainJournalCanBeReadAndConfigured() throws {
         let app = XCUIApplication()
         app.launch()
