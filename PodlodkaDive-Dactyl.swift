@@ -4189,53 +4189,60 @@ struct ReturnEventsView: View {
     @State private var loadingPreviews = true
     var body: some View {
         NavigationStack {
-            List {
-                Button("Готово") { dismiss() }.font(.body).frame(minHeight: 44).accessibilityIdentifier("closeEvents").accessibilityFocused($titleFocused)
-                Section("Предпросмотр напоминаний") {
-                    if loadingPreviews {
-                        ProgressView("Проверяем напоминания")
-                    } else if previews.isEmpty {
-                        Text("Нет запланированных напоминаний для сохранённой экспедиции.")
-                    } else {
-                        ForEach(previews) { preview in
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(preview.title).font(.headline)
-                                Text(preview.body)
-                                Text(preview.date, format: .dateTime.day().month().year().hour().minute())
-                                Button("Проверить переход в экспедицию") {
-                                    dismiss(); open(preview.url)
-                                }
-                                .accessibilityHint("Открывает сохранение на паузе и отменяет оставшиеся напоминания")
-                            }.padding(.vertical, 4)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Button("Готово") { dismiss() }.font(.body).frame(minHeight: 44).accessibilityIdentifier("closeEvents").accessibilityFocused($titleFocused)
+                    Section("Предпросмотр напоминаний") {
+                        if loadingPreviews {
+                            ProgressView("Проверяем напоминания")
+                        } else if previews.isEmpty {
+                            Text("Нет запланированных напоминаний для сохранённой экспедиции.")
+                        } else {
+                            ForEach(previews) { preview in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(preview.title).font(.headline)
+                                    Text(preview.body)
+                                    Text(preview.date, format: .dateTime.day().month().year().hour().minute())
+                                    Button("Проверить переход в экспедицию") {
+                                        dismiss(); open(preview.url)
+                                    }
+                                    .accessibilityHint("Открывает сохранение на паузе и отменяет оставшиеся напоминания")
+                                }.padding(.vertical, 4)
+                            }
+                            Text("Время местное. Показ уведомления зависит от настроек уведомлений и режима фокусирования iOS.")
                         }
-                        Text("Время местное. Показ уведомления зависит от настроек уведомлений и режима фокусирования iOS.")
+                        Button {
+                            Task { await refreshPreviews() }
+                        } label: {
+                            Text("Обновить напоминания").fixedSize(horizontal: false, vertical: true)
+                        }.font(.body).frame(minHeight: 44).disabled(loadingPreviews)
                     }
-                    Button {
-                        Task { await refreshPreviews() }
+                    Picker(selection: $filter) {
+                        ForEach(ExpeditionRecovery.Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     } label: {
-                        Text("Обновить напоминания").fixedSize(horizontal: false, vertical: true)
-                    }.font(.body).frame(minHeight: 44).disabled(loadingPreviews)
+                        Text("Фильтр событий").fixedSize(horizontal: false, vertical: true)
+                    }.font(.body).frame(minHeight: 44).accessibilityIdentifier("eventFilter")
+                    if recovery.events(filter).isEmpty { Text("Нет событий").font(.body).fixedSize(horizontal: false, vertical: true).frame(minHeight: 44).accessibilityIdentifier("emptyEvents") }
+                    ForEach(recovery.events(filter)) { event in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(event.title).font(.headline)
+                            Text(event.date, format: .dateTime.day().month().year().hour().minute())
+                            Text(event.text)
+                            Button(event.read ? "Прочитано · отметить непрочитанным" : "Не прочитано · отметить прочитанным") { recovery.markRead(event.id) }
+                                .accessibilityHint("Меняет статус этого события")
+                            if recovery.canOpen(event), let id = event.expedition {
+                                Button("Открыть экспедицию") { dismiss(); open(ReturnRoute(id: id).url) }
+                                    .accessibilityHint("Открывает сохранение на паузе")
+                            }
+                        }.padding(.vertical, 4)
+                    }
                 }
-                Picker(selection: $filter) {
-                    ForEach(ExpeditionRecovery.Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                } label: {
-                    Text("Фильтр событий").fixedSize(horizontal: false, vertical: true)
-                }.font(.body).frame(minHeight: 44).accessibilityIdentifier("eventFilter")
-                if recovery.events(filter).isEmpty { Text("Нет событий").font(.body).fixedSize(horizontal: false, vertical: true).frame(minHeight: 44).accessibilityIdentifier("emptyEvents") }
-                ForEach(recovery.events(filter)) { event in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(event.title).font(.headline)
-                        Text(event.date, format: .dateTime.day().month().year().hour().minute())
-                        Text(event.text)
-                        Button(event.read ? "Прочитано · отметить непрочитанным" : "Не прочитано · отметить прочитанным") { recovery.markRead(event.id) }
-                            .accessibilityHint("Меняет статус этого события")
-                        if recovery.canOpen(event), let id = event.expedition {
-                            Button("Открыть экспедицию") { dismiss(); open(ReturnRoute(id: id).url) }
-                                .accessibilityHint("Открывает сохранение на паузе")
-                        }
-                    }.padding(.vertical, 4)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
             }
+            .background(Color.black)
+            .foregroundStyle(.white)
+            .tint(.white)
             .font(.body)
             .navigationTitle("События")
             .onAppear { titleFocused = true }

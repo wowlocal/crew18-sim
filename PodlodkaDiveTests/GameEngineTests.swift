@@ -1424,7 +1424,9 @@ final class ExpeditionRecoveryTests: XCTestCase {
         XCTAssertTrue(recovery.save(exiting: false))
         let id = try XCTUnwrap(recovery.savedID)
         await recovery.settle()
-        let requests = ReminderPlan.requests(id: id, eventID: UUID(), now: Date(), calendar: .current)
+        var snapshot = engine.snapshot()
+        snapshot.energy = ReminderPlanner.lowEnergy
+        let requests = ReminderPlanner.requests(save: snapshot, eventID: UUID(), now: Date(), calendar: .current)
         try await client.replace(requests.reversed())
         let historyCount = recovery.history.count
         let previews = await recovery.reminderPreviews()
@@ -1454,12 +1456,16 @@ final class ExpeditionRecoveryTests: XCTestCase {
         await recovery.settle()
         let unrelated = UNNotificationRequest(identifier: "other", content: UNMutableNotificationContent(),
                                               trigger: UNTimeIntervalNotificationTrigger(timeInterval: 60, repeats: false))
-        let stale = ReminderPlan.requests(id: UUID(), eventID: UUID(), now: Date(), calendar: .current)
+        var snapshot = engine.snapshot()
+        snapshot.energy = ReminderPlanner.lowEnergy
+        snapshot.id = UUID()
+        let stale = ReminderPlanner.requests(save: snapshot, eventID: UUID(), now: Date(), calendar: .current)
         try await client.replace(stale + [unrelated])
         let previews = await recovery.reminderPreviews()
         XCTAssertTrue(previews.isEmpty)
         XCTAssertEqual(client.requests.count, 3)
-        try await client.replace(ReminderPlan.requests(id: id, eventID: UUID(), now: Date(), calendar: .current))
+        snapshot.id = id
+        try await client.replace(ReminderPlanner.requests(save: snapshot, eventID: UUID(), now: Date(), calendar: .current))
         recovery.deleteSave()
         let afterDelete = await recovery.reminderPreviews()
         XCTAssertTrue(afterDelete.isEmpty)
