@@ -118,6 +118,7 @@ struct ExpeditionReplayView: View {
                 }
                 let state = timeline.state(at: time)
                 Text("Энергия: \(state["energy"] ?? "—") · Корпус: \(state["hull"] ?? "—")")
+                Text(state["missionTitle"] ?? CampaignMission.aster.title)
                 Text("Груз: \(state["cargo"] ?? "—") · Цель: \(state["target"] ?? "—")")
                 ForEach(timeline.events.filter { $0.type != "snapshot" && $0.time <= time && $0.time >= time - 3 }.suffix(5)) { event in
                     Text(event.type).font(.body)
@@ -170,7 +171,7 @@ private struct TelemetryReplayMap: View {
                     }
                     path.closeSubpath(); context.fill(path, with: .color(.gray.opacity(0.5)))
                 }
-                for key in ["pickups", "mines"] {
+                for key in ["pickups", "mines", "signals"] {
                     for object in (state[key] ?? "").split(separator: ";") {
                         let parts = object.split(separator: ",").map(String.init)
                         guard parts.count >= 4, parts[1] != "spent" else { continue }

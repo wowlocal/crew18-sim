@@ -79,7 +79,9 @@ final class VoiceOverAnnouncer: ObservableObject {
                 text = A11yL10n.text("speech.paused", defaultValue: "Пауза")
             case .completed:
                 guard let engine else { return }
-                text = A11yL10n.format("speech.completed", defaultValue: "Груз доставлен: %lld. Рекорд: %lld.", Int64(engine.score), Int64(engine.bestScore))
+                text = engine.outcome == .returned
+                    ? "Вернулись без выполнения задания. Доставлено: \(engine.score). Следующая экспедиция не открыта."
+                    : A11yL10n.format("speech.completed", defaultValue: "Груз доставлен: %lld. Рекорд: %lld.", Int64(engine.score), Int64(engine.bestScore))
             case .gameOver:
                 text = engine?.failureReason == .energy
                     ? A11yL10n.text("a11y.result.energy.detail", defaultValue: "Заряд закончился. Груз остался на глубине.")
@@ -170,7 +172,7 @@ final class VoiceOverAnnouncer: ObservableObject {
         } else {
             parts = [A11yL10n.format("speech.instruments", defaultValue: "Глубина %lld метров, скорость %lld метров в секунду.", Int64(summary.depth), Int64(summary.speed)),
                      A11yL10n.format("speech.target", defaultValue: "%@: %lld метров, %@.",
-                                    summary.returning ? A11yL10n.contactKind(.base) : A11yL10n.pickupName(.blackBox),
+                                    summary.targetName ?? (summary.returning ? A11yL10n.contactKind(.base) : A11yL10n.pickupName(.blackBox)),
                                     Int64(summary.targetDistance), summary.targetCourse.label)]
         }
         for contact in [summary.danger, summary.find].compactMap({ $0 }) {

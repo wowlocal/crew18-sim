@@ -14,6 +14,8 @@ struct GameView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @AppStorage("podlodkaDive.voiceOverButtons") private var voiceOverButtons = false
+    @State private var showingCampaign = false
+    @State private var confirmingAbandon = false
     @State private var showingMap = false
     @State private var showingCrewJournal = false
     @State private var crewVisibleLimit = 50
@@ -131,6 +133,18 @@ struct GameView: View {
         .onChange(of: showingGarage) { _, visible in engine.navigate(to: visible ? "Garage" : "Welcome", reason: visible ? "openGarage" : "closeGarage") }
         .onChange(of: showingJournal) { _, visible in engine.navigate(to: visible ? "Journal" : journalReturnScreen, reason: visible ? "openJournal" : "closeJournal") }
         .onChange(of: showingReplay) { _, visible in engine.navigate(to: visible ? "Replay" : journalReturnScreen, reason: visible ? "openReplay" : "closeReplay") }
+        .onChange(of: showingCampaign) { _, visible in
+            engine.navigate(to: visible ? "Campaign" : "Welcome", reason: visible ? "openCampaign" : "closeCampaign")
+            recorder.flow(visible ? "campaign" : "ready")
+        }
+        .fullScreenCover(isPresented: $showingCampaign) { CampaignView(engine: engine) }
+        .alert("Прервать рейс?", isPresented: $confirmingAbandon) {
+            Button("Прервать рейс", role: .destructive) { showingMap = false; engine.returnToMenu() }
+                .accessibilityIdentifier("confirmAbandon")
+            Button("Остаться", role: .cancel) {}.accessibilityIdentifier("cancelAbandon")
+        } message: {
+            Text("Недоставленная добыча пропадёт. Кристаллы сохранятся.")
+        }
         .fullScreenCover(isPresented: $showingArchives) { archiveLibrary }
         .sheet(isPresented: $showingGarage) { garagePanel }
         .sheet(isPresented: $showingReplay) {
@@ -213,6 +227,7 @@ struct GameView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text(engine.objectiveText).font(.title2).accessibilityAddTraits(.isHeader)
+                Text(engine.missionStatus).font(.body)
                 Text(engine.accessibilityStatus).font(.body)
                 Text(engine.sectorOverview).font(.body)
                 SteeringPad(onInput: engine.setSteering, steering: engine.steering,
@@ -260,7 +275,7 @@ struct GameView: View {
                     .font(.system(.largeTitle, design: .rounded).weight(.bold))
                     .tracking(-1.5).foregroundStyle(OceanPalette.white)
 
-                Text("Аварийная темнота. Найди чёрный ящик и вернись.")
+                Text(engine.mission?.briefing ?? "Найди чёрный ящик и вернись.")
                     .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
                     .multilineTextAlignment(.center)
                     .background(OceanPalette.ink)
@@ -269,15 +284,15 @@ struct GameView: View {
             .frame(minHeight: 44)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(A11yL10n.text("a11y.welcome.title", defaultValue: "Podlodka Dive. Курс на глубину."))
-            .accessibilityValue(A11yL10n.text("a11y.welcome.objective", defaultValue: "Найди чёрный ящик и вернись с добычей."))
+            .accessibilityValue(engine.mission?.briefing ?? "Найди чёрный ящик и вернись с добычей.")
             .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 0)
             VStack(spacing: size.height < 720 ? 16 : 22) {
                 HStack(spacing: 7) {
                     Circle().fill(OceanPalette.teal).frame(width: 4, height: 4)
-                    Text("ЭКСПЕДИЦИЯ 01 / ЗАТОНУВШИЙ ASTER").fixedSize(horizontal: false, vertical: true)
+                    Text(engine.mission.map { "ЭКСПЕДИЦИЯ \($0.number) / \($0.title)" } ?? "ЭКСПЕДИЦИЯ / ASTER").fixedSize(horizontal: false, vertical: true)
                         .font(.system(.body, design: .monospaced).weight(.semibold)).tracking(0)
-                }.foregroundStyle(OceanPalette.teal)
+                }.foregroundStyle(OceanPalette.teal).background(OceanPalette.ink)
                 HStack(spacing: 0) {
                     instruction(icon: "arrow.up.and.down.and.arrow.left.and.right", title: "Свободный курс", detail: "Тяни стик в любую сторону")
                     Rectangle().fill(OceanPalette.teal.opacity(0.15)).frame(width: 1, height: 48)
@@ -290,6 +305,25 @@ struct GameView: View {
                 .padding(.vertical, 17)
                 .background(OceanPalette.ink.opacity(0.45), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(OceanPalette.teal.opacity(0.12), lineWidth: 1))
+                Button {
+                    showingMap = false
+                    engine.startGame()
+                } label: {
+                    HStack { Spacer(); Text("Начать экспедицию"); Spacer(); Image(systemName: "arrow.right") }
+                }
+                .buttonStyle(DiveButtonStyle())
+                .accessibilityLabel(A11yL10n.text("a11y.start", defaultValue: "Начать экспедицию"))
+                .accessibilityHint(A11yL10n.text("a11y.start.hint", defaultValue: "Запускает экспедицию и открывает приборы управления."))
+                .accessibilityIdentifier("startDive").accessibilityFocused($focusedControl, equals: "startDive")
+                if engine.isCampaign {
+                    Button { showingCampaign = true } label: {
+                        Label("Выбор экспедиции", systemImage: "map")
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.white).accessibilityIdentifier("openCampaign")
+                    Text(engine.mission?.hint ?? "").font(.body).foregroundStyle(.white).background(OceanPalette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 journalButton
                 Button {
                     garageMessage = ""
@@ -301,16 +335,6 @@ struct GameView: View {
                 .accessibilityHint("Кастомизация подлодки перед экспедицией")
                 .accessibilityIdentifier("openGarage")
                 .buttonStyle(.plain).foregroundStyle(OceanPalette.white)
-                Button {
-                    showingMap = false
-                    engine.startGame()
-                } label: {
-                    HStack { Spacer(); Text("Начать экспедицию"); Spacer(); Image(systemName: "arrow.right") }
-                }
-                .buttonStyle(DiveButtonStyle())
-                .accessibilityLabel(A11yL10n.text("a11y.start", defaultValue: "Начать экспедицию"))
-                .accessibilityHint(A11yL10n.text("a11y.start.hint", defaultValue: "Запускает экспедицию и открывает приборы управления."))
-                .accessibilityIdentifier("startDive").accessibilityFocused($focusedControl, equals: "startDive")
                 if voiceOverEnabled {
                     Toggle("Пошаговое управление VoiceOver", isOn: $voiceOverButtons)
                         .tint(OceanPalette.teal)
@@ -413,16 +437,18 @@ struct GameView: View {
                         .tracking(0).foregroundStyle(OceanPalette.white).background(OceanPalette.ink)
                     Text(engine.objectiveText)
                         .font(.system(.body, design: .rounded).weight(.semibold))
-                        .foregroundStyle(engine.hasBlackBox ? OceanPalette.teal : OceanPalette.white)
+                        .foregroundStyle(engine.objectiveReady ? OceanPalette.teal : OceanPalette.white)
+                    if engine.mission != nil {
+                        Text(engine.missionStatus).font(.body).foregroundStyle(.white)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
 
                 }
                 .allowsHitTesting(false)
                 .frame(minHeight: 44).contentShape(Rectangle())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(A11yL10n.text("a11y.objective.label", defaultValue: "Цель экспедиции"))
-                .accessibilityValue(engine.zone == .bossCave ? engine.accessibilityStatus : (engine.hasBlackBox
-                    ? A11yL10n.text("a11y.objective.base", defaultValue: "Доставить чёрный ящик на базу")
-                    : A11yL10n.text("a11y.objective.blackbox", defaultValue: "Найти чёрный ящик")))
+                .accessibilityValue(engine.objectiveText)
                 .accessibilitySortPriority(8)
                 Spacer(minLength: 0)
                 hudButton("ear", label: "Озвучить обстановку", id: "speakSurroundings", action: announcer.describeSurroundings)
@@ -478,18 +504,19 @@ struct GameView: View {
                     .rotationEffect(.radians(atan2(engine.target.y - engine.position.y, engine.target.x - engine.position.x) + .pi / 2))
                 Text(engine.zone == .bossCave
                      ? "СПРУТ · \(Int(ceil(engine.bossTimeRemaining))) С"
-                     : "\(engine.hasBlackBox ? "БАЗА" : "СИГНАЛ") · \(engine.targetDistance) М")
+                     : "\(engine.targetLabel) · \(engine.targetDistance) М")
                     .tracking(0)
                 Spacer()
-                if engine.zone == .ocean, engine.hasBlackBox { Label("ЯЩИК НА БОРТУ", systemImage: "checkmark").foregroundStyle(OceanPalette.teal) }
+                if engine.zone == .ocean, engine.objectiveReady {
+                    Image(systemName: "checkmark.circle").foregroundStyle(OceanPalette.teal)
+                }
             }
             .font(.system(.body, design: .monospaced).weight(.semibold))
             .foregroundStyle(OceanPalette.gold).allowsHitTesting(false)
             .frame(minHeight: 44)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(A11yL10n.text("a11y.target.course", defaultValue: "Курс на цель"))
-            .accessibilityValue(A11yL10n.format("a11y.target.value.format", defaultValue: "Сигнал: %lld метров, на %lld часов",
-                                                Int64(engine.targetDistance), Int64(engine.targetClockHour)))
+            .accessibilityValue("\(engine.targetLabel): \(engine.targetDistance) метров, на \(engine.targetClockHour) часов. \(engine.missionStatus)")
             .frame(minHeight: 44)
             .contentShape(Rectangle())
             .accessibilitySortPriority(4)
@@ -616,7 +643,7 @@ struct GameView: View {
                 Image(systemName: "location.north.fill")
                     .font(.system(.callout).weight(.medium))
                     .rotationEffect(.radians(atan2(engine.target.y - engine.position.y, engine.target.x - engine.position.x) + .pi / 2))
-                    .foregroundStyle(engine.hasBlackBox ? OceanPalette.teal : OceanPalette.gold)
+                    .foregroundStyle(engine.objectiveReady ? OceanPalette.teal : OceanPalette.gold)
                     .frame(width: 44, height: 44)
                     .background(OceanPalette.ink.opacity(0.7), in: Circle())
                     .overlay(Circle().stroke(OceanPalette.gold.opacity(0.25), lineWidth: 1))
@@ -717,8 +744,9 @@ struct GameView: View {
     private var resultPanel: some View {
         let paused = engine.state == .paused
         let success = engine.state == .completed
-        let title = paused ? "Можно выдохнуть." : (success ? "Груз доставлен." : "Океан сильнее.")
-        let detail = paused ? "Экспедиция на паузе. Заряд сохраняется." : (success ? "Чёрный ящик на базе. Хорошая работа, капитан." : (engine.failureReason == .energy ? "Заряд закончился. Груз остался на глубине." : "Корпус не выдержал. Груз остался на глубине."))
+        let title = paused ? "Можно выдохнуть." : (success
+            ? (engine.outcome == .returned ? "Экипаж дома." : "Задание выполнено.") : "Океан сильнее.")
+        let detail = paused ? "Экспедиция на паузе. Заряд сохраняется." : (success ? engine.resultDetail : (engine.failureReason == .energy ? "Заряд закончился. Груз остался на глубине." : "Корпус не выдержал. Груз остался на глубине."))
         return VStack(spacing: 22) {
 
             Image(systemName: paused ? "pause.fill" : (success ? "shippingbox.fill" : "water.waves"))
@@ -762,6 +790,16 @@ struct GameView: View {
                     .buttonStyle(.plain).padding(8).background(OceanPalette.ink, in: RoundedRectangle(cornerRadius: 12))
                     .accessibilityIdentifier("resultReplay")
                 }
+                if success, engine.outcome == .completed, let next = engine.mission?.next {
+                    Button {
+                        engine.returnToMenu()
+                        _ = engine.selectMission(next)
+                        showingCampaign = true
+                    } label: {
+                        Text("Следующая экспедиция").frame(maxWidth: .infinity, minHeight: 48)
+                    }
+                    .buttonStyle(DiveButtonStyle()).accessibilityIdentifier("nextMission")
+                }
                 Button {
                     if paused { engine.togglePause() } else { engine.startGame() }
                 } label: {
@@ -771,6 +809,22 @@ struct GameView: View {
                         ? A11yL10n.text("a11y.resume", defaultValue: "Продолжить")
                         : A11yL10n.text("a11y.retry", defaultValue: "Новая экспедиция"))
                     .accessibilityFocused($focusedControl, equals: paused ? "resumeDive" : "retryDive")
+                if paused, engine.isCampaign, !engine.objectiveReady {
+                    if engine.zone == .ocean {
+                        Text("Вернись в круг базы и остановись. Добыча сохранится, следующее задание не откроется.")
+                            .font(.body).foregroundStyle(.white).background(OceanPalette.ink)
+                            .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.center)
+                        Button(engine.missionRun?.returningEarly == true ? "Продолжить задание" : "Курс на базу") {
+                            let requested = engine.missionRun?.returningEarly != true
+                            engine.togglePause()
+                            engine.setReturnToBase(requested)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .buttonStyle(.bordered).accessibilityIdentifier("returnCourse")
+                    } else {
+                        Text("Выйди из пещеры, чтобы проложить курс домой.").font(.body)
+                    }
+                }
                 if paused {
                     Button(action: openMap) {
                         Text("Открыть карту").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
@@ -778,12 +832,15 @@ struct GameView: View {
                         .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.teal)
                         .accessibilityLabel(A11yL10n.text("a11y.map.open", defaultValue: "Карта экспедиции"))
                 }
-                Button { showingMap = false; engine.returnToMenu() } label: {
-                    Text("На поверхность").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                Button {
+                    if paused { confirmingAbandon = true }
+                    else { showingMap = false; engine.returnToMenu(); showingCampaign = engine.isCampaign }
+                } label: {
+                    Text(paused ? "Прервать рейс" : "Выбор экспедиции").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 }
                     .font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.white)
                     .accessibilityIdentifier("returnToMenu")
-                    .accessibilityLabel(A11yL10n.text("a11y.return.menu", defaultValue: "На поверхность"))
+                    .accessibilityLabel(paused ? "Прервать рейс" : "Выбор экспедиции")
             }
             if !paused, let diveID = engine.diveID {
                 LatestReceiptView(journal: .shared, diveID: diveID)
@@ -797,13 +854,13 @@ struct GameView: View {
 
     private func resultAccessibilityTitle(paused: Bool, success: Bool) -> String {
         if paused { return A11yL10n.text("a11y.result.paused", defaultValue: "Экспедиция на паузе") }
-        if success { return A11yL10n.text("a11y.result.success", defaultValue: "Груз доставлен") }
+        if success { return engine.outcome == .returned ? "Вернулись без выполнения задания" : "Задание выполнено" }
         return A11yL10n.text("a11y.result.failure", defaultValue: "Экспедиция завершена")
     }
 
     private func resultAccessibilityDetail(paused: Bool, success: Bool) -> String {
         if paused { return A11yL10n.text("a11y.result.paused.detail", defaultValue: "Заряд сохраняется.") }
-        if success { return A11yL10n.text("a11y.result.success.detail", defaultValue: "Чёрный ящик на базе.") }
+        if success { return engine.resultDetail }
         if engine.failureReason == .energy {
             return A11yL10n.text("a11y.result.energy.detail", defaultValue: "Заряд закончился. Груз остался на глубине.")
         }
@@ -1148,6 +1205,9 @@ struct LiveExpeditionMap: View {
                 let rect = CGRect(x: zone.bounds.minX * scale + offset.x, y: zone.bounds.minY * scale + offset.y,
                                   width: zone.bounds.width * scale, height: zone.bounds.height * scale)
                 context.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(OceanPalette.blue.opacity(0.10)))
+                let arrow = abs(zone.velocity.dx) > abs(zone.velocity.dy)
+                    ? (zone.velocity.dx > 0 ? "→" : "←") : (zone.velocity.dy > 0 ? "↓" : "↑")
+                context.draw(Text(arrow).font(.title).foregroundStyle(OceanPalette.blue), at: CGPoint(x: rect.midX, y: rect.midY))
             }
             for rock in engine.level.rocks {
                 var path = Path(); path.addLines(rock.vertices.map(point)); path.closeSubpath()
@@ -1174,11 +1234,14 @@ struct LiveExpeditionMap: View {
                 context.stroke(Path(ellipseIn: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)),
                                with: .color(OceanPalette.portal), lineWidth: 2)
             }
-            let base = point(engine.level.base), wreck = point(engine.level.wreck), boat = point(engine.position)
+            let base = point(engine.level.base), boat = point(engine.position)
             context.stroke(Path(ellipseIn: CGRect(x: base.x - 6, y: base.y - 6, width: 12, height: 12)), with: .color(OceanPalette.teal), lineWidth: 1.4)
             context.draw(Text(A11yL10n.contactKind(.base)).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.teal), at: CGPoint(x: base.x, y: base.y - 16))
-            context.fill(Path(roundedRect: CGRect(x: wreck.x - 5, y: wreck.y - 4, width: 10, height: 8), cornerRadius: 2), with: .color(engine.hasBlackBox ? OceanPalette.white : OceanPalette.gold))
-            context.draw(Text(engine.hasBlackBox ? "Aster" : A11yL10n.contactKind(.target)).font(.system(.body).weight(.semibold)).foregroundStyle(OceanPalette.gold), at: CGPoint(x: wreck.x, y: wreck.y + 15))
+            for landmark in engine.missionLandmarks {
+                let p = point(landmark.position)
+                context.stroke(Path(ellipseIn: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)), with: .color(OceanPalette.gold), lineWidth: 2)
+                context.draw(Text(landmark.label).font(.body).foregroundStyle(.white), at: CGPoint(x: p.x, y: p.y + 17))
+            }
             context.fill(Path(ellipseIn: CGRect(x: boat.x - 4, y: boat.y - 4, width: 8, height: 8)), with: .color(.white))
             context.stroke(Path(ellipseIn: CGRect(x: boat.x - 8, y: boat.y - 8, width: 16, height: 16)), with: .color(.white.opacity(0.4)), lineWidth: 1)
         }

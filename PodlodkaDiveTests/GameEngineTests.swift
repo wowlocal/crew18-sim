@@ -39,26 +39,8 @@ final class GameEngineTests: XCTestCase {
         add(attachment)
     }
 
-    /// Route follower uses the same stick as the player at 10 Hz, including
-    /// counter-steering against visible currents. No position/energy overrides.
     private func navigate(_ engine: GameEngine, through points: [CGPoint], fps: Double = 120) {
-        for target in points {
-            for _ in 0..<700 {
-                guard engine.state == .playing else { return }
-                let dx = target.x - engine.position.x, dy = target.y - engine.position.y
-                if hypot(dx, dy) < 8 { break }
-                let distance = hypot(dx, dy)
-                let speed = min(GameEngine.cruiseSpeed, distance * 2.8)
-                let flow = engine.current(at: engine.position)
-                engine.setSteering(CGVector(dx: (dx / distance * speed - flow.dx) / GameEngine.cruiseSpeed,
-                                             dy: (dy / distance * speed - flow.dy) / GameEngine.cruiseSpeed))
-                advance(engine, 0.1, fps: fps)
-            }
-            XCTAssertLessThan(hypot(target.x - engine.position.x, target.y - engine.position.y), 10,
-                              "Unreachable waypoint \(target), position \(engine.position), energy \(engine.energy)")
-        }
-        engine.setSteering(.zero)
-        advance(engine, 0.5, fps: fps)
+        GameTestPilot.navigate(engine, through: points, fps: fps)
     }
 
     func testJournalLeakIsThrottledExpiresAndFreezesOnPause() {
@@ -394,19 +376,7 @@ final class GameEngineTests: XCTestCase {
         let engine = makeEngine(level: level, randomValues: [0.1, 0])
         advance(engine, 0.01)
         let returnPoint = level.spawn
-        var sawWarning = false
-        for _ in 0..<300 where engine.zone == .bossCave && engine.state == .playing {
-            if let strike = engine.bossStrike, strike.phase == .warning {
-                sawWarning = true
-                let goRight = strike.position.x < GameEngine.caveSize.width / 2
-                    || engine.position.x < GameEngine.caveSize.width / 2
-                engine.setSteering(CGVector(dx: goRight ? 1 : -1, dy: 0))
-                engine.activateBoost()
-            } else if engine.bossStrike?.phase == .impact {
-                engine.setSteering(.zero)
-            }
-            advance(engine, 0.1)
-        }
+        let sawWarning = GameTestPilot.surviveCave(engine)
         XCTAssertTrue(sawWarning)
         XCTAssertEqual(engine.state, .playing)
         XCTAssertEqual(engine.zone, .ocean)
