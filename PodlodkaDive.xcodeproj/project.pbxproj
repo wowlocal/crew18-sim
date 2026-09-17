@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        B10000000000000000000001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001; };
         E10000000000000000000001 = {isa = PBXBuildFile; fileRef = E20000000000000000000001; };
 		D10000000000000000000001 /* VoiceOverAnnouncer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
 		A10000000000000000000001 /* PodlodkaDiveApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* PodlodkaDiveApp.swift */; };
@@ -52,6 +53,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        B20000000000000000000001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
         E20000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpeditionRecovery.swift; sourceTree = "<group>"; };
 		D20000000000000000000001 /* VoiceOverAnnouncer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceOverAnnouncer.swift; sourceTree = "<group>"; };
 		A20000000000000000000001 /* PodlodkaDiveApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodlodkaDiveApp.swift; sourceTree = "<group>"; };
@@ -139,6 +141,7 @@
 				F20000000000000000000001 /* ExpeditionLog.swift */,
 				A20000000000000000000004 /* GameCanvas.swift */,
 				A20000000000000000000005 /* Assets.xcassets */,
+                B20000000000000000000001 /* PrivacyInfo.xcprivacy */,
 				A2000000000000000000000A /* Localizable.xcstrings */,
 			);
 			path = PodlodkaDive;
@@ -287,6 +290,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000005 /* Assets.xcassets in Resources */,
+                B10000000000000000000001 /* PrivacyInfo.xcprivacy in Resources */,
 				A10000000000000000000008 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
